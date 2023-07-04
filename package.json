@@ -1,0 +1,27 @@
+{
+  "name": "kromosynth-render",
+  "version": "1.0.0",
+  "description": "kromosynth rendering (gRPC) service",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/synth-is/kromosynth-render.git"
+  },
+  "author": "Björn Þór Jónsson <bangsi@bthj.is>",
+  "license": "AGPL-3.0-or-later",
+  "bugs": {
+    "url": "https://github.com/synth-is/kromosynth-render/issues"
+  },
+  "homepage": "https://github.com/synth-is/kromosynth-render#readme",
+  "dependencies": {
+    "@grpc/grpc-js": "^1.8.17",
+    "@grpc/proto-loader": "^0.7.7",
+    "kromosynth": "^1.0.9",
+    "node-fetch": "^3.3.1",
+    "node-web-audio-api": "^0.10.0"
+  },
+  "type": "module"
+}

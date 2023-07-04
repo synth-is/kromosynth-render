@@ -1,0 +1,26 @@
+syntax = "proto3";
+import "google/protobuf/struct.proto";
+
+option java_multiple_files = true;
+option java_package = "is.synth.grpc.rendering";
+option java_outer_classname = "KromosynthRendering";
+option objc_class_prefix = "KSR";
+
+package kromosynthrendering;
+
+service KromosynthRendering {
+  rpc RenderGenome(RenderRequest) returns (stream RenderResponse) {}
+}
+
+message RenderRequest {
+  string genomeStringUrl = 1;
+  float duration = 2;
+  float noteDelta = 3;
+  float velocity = 4;
+  bool reverse = 5;
+  bool useOvertoneInharmonicityFactors = 6;
+}
+
+message RenderResponse {
+  bytes audio = 1;
+}
