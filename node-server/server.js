@@ -75,7 +75,7 @@ function main() {
   server.addService( gene_proto.KromosynthRendering.service, {
     renderGenome: renderGenome
   });
-  server.bindAsync('0.0.0.0:50051', grpc.ServerCredentials.createInsecure(), () => {
+  server.bindAsync('0.0.0.0:9090', grpc.ServerCredentials.createInsecure(), () => {
     server.start();
     console.log('Rendering gRPC server running on port 50051');
   });

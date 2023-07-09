@@ -1,0 +1,21 @@
+apiVersion: "apps/v1"
+kind: Deployment
+metadata:
+  name: gpu-demo
+  namespace: "bthj-ns0000k"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: "gpu-demo"
+  template:
+    metadata:
+      labels:
+        app: gpu-demo
+    spec:
+      containers:
+      - name: gpu-demo
+        image: nvidia/cuda:12.2.0-runtime-ubuntu22.04
+        resources:
+          limits:
+            nvidia.com/gpu: 1
