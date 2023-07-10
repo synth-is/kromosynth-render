@@ -21,7 +21,7 @@
     "@grpc/proto-loader": "^0.7.7",
     "kromosynth": "^1.0.9",
     "node-fetch": "^3.3.1",
-    "node-web-audio-api": "^0.10.0"
+    "node-web-audio-api": "^0.7.0"
   },
   "type": "module"
 }

@@ -77,7 +77,7 @@ function main() {
   });
   server.bindAsync('0.0.0.0:9090', grpc.ServerCredentials.createInsecure(), () => {
     server.start();
-    console.log('Rendering gRPC server running on port 50051');
+    console.log('Rendering gRPC server running on port 9090');
   });
 }
 
