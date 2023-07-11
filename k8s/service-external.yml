@@ -1,0 +1,16 @@
+---
+apiVersion: "v1"
+kind: "Service"
+metadata:
+  name: "kromosynth-render-service"
+  namespace: "bthj-ns0000k"
+  labels:
+    app: "kromosynth-render"
+spec:
+  ports:
+    - protocol: "TCP"
+      port: 80
+      targetPort: 8080
+  selector:
+    app: "kromosynth-render"
+  type: "LoadBalancer"
