@@ -1,0 +1,41 @@
+---
+apiVersion: "apps/v1"
+kind: "Deployment"
+metadata:
+  name: "kromosynth-render"
+  namespace: "bthj-ns0000k"
+  labels:
+    app: "kromosynth-render"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: "kromosynth-render"
+  template:
+    metadata:
+      labels:
+        app: "kromosynth-render"
+    spec:
+      containers:
+        - name: "kromosynth-render-container"
+          image: "bthj/kromosynth-render"
+          env:
+          - name: TF_FORCE_GPU_ALLOW_GROWTH
+            value: 'true'
+          resources:
+            requests:
+              memory: "2G"
+              cpu: "250m"
+            limits:
+              memory: "4G"
+              cpu: "500m"
+              nvidia.com/gpu: 1
+        - name: "kromosynth-render-container-proxy"
+          image: "grpcweb/envoy"
+          resources:
+            requests:
+              memory: "1G"
+              cpu: "250m"
+            limits:
+              memory: "2G"
+              cpu: "500m"

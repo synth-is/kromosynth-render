@@ -1,0 +1,21 @@
+apiVersion: "autoscaling/v2"
+kind: "HorizontalPodAutoscaler"
+metadata:
+  name: "kromosynth-render-hpa"
+  namespace: "bthj-ns0000k"
+  labels:
+    app: "kromosynth-render"
+spec:
+  scaleTargetRef:
+    kind: "Deployment"
+    name: "kromosynth-render"
+    apiVersion: "apps/v1beta1"
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+    - type: "Resource"
+      resource:
+        name: "cpu"
+        target: 
+          type: Utilization
+          averageUtilization: 80
