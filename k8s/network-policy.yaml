@@ -1,0 +1,18 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kromosynth-render-network-policy
+  namespace: "bthj-ns0000k"
+spec:
+  podSelector:
+    matchLabels:
+      app: kromosynth-render
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+        - namespaceSelector:
+            matchLabels:
+              project: bthj-ns0000k

@@ -37,12 +37,13 @@ function renderGenome( call ) {
     console.log('genome string:', data);
 
     const genome = JSON.parse(data);
+    const audioContext = await getAudioContext();
     const audioBuffer = await getAudioBufferFromGenomeAndMeta(
 			genome,
 			duration, noteDelta, velocity, reverse,
 			false, // asDataArray
 			getNewOfflineAudioContext( duration ),
-			getAudioContext(),
+			audioContext,
 			useOvertoneInharmonicityFactors
 		);
 
@@ -61,7 +62,17 @@ function renderGenome( call ) {
 
     const audioData = audioBuffer.getChannelData(0);
     console.log('audioData:', audioData);
-    call.write({ audio: audioData });
+
+    // // assume that the PCM data ranges from -1.0 to 1.0, and we convert it to a byte array in the range of 0 to 255 using (value + 1) * 127.5.
+    // const pcmData = Uint8Array.from(audioData.map((value) => Math.round((value + 1) * 127.5)));
+
+    // Convert PCM data to an array of integers in the range of [-32767, 32767]
+    const intPcmData = new Uint8Array(audioData.map((value) => Math.round(value * 32767)));
+
+    console.log('intPcmData:', intPcmData);
+    call.write({ 
+      audio: Buffer.from(intPcmData.buffer),
+    });
     call.end();
   })
   .catch((error) => {

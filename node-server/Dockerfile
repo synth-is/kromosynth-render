@@ -16,6 +16,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN curl -sL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y nodejs
 
+# https://github.com/cypress-io/cypress-docker-images/issues/52#issuecomment-446144630
+COPY /node-server/asound.conf /etc/asound.conf
+
 WORKDIR /app
 
 COPY /node-server /app
