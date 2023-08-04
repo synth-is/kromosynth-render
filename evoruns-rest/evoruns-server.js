@@ -5,7 +5,10 @@ const bodyParser = require('body-parser');
 const admin = require('firebase-admin');
 const cors = require('cors');
 const fs = require('fs').promises;
+const fsSync = require('fs');
 const path = require('path');
+const nthline = require('nthline');
+const { execSync, spawn } = require('child_process');
 
 const app = express();
 app.use(cors({ 
@@ -61,7 +64,9 @@ async function getSubdirectoryPathsFromParentDirectoryPaths() {
     subdirectoryNames.forEach( (subdirectoryName) => {
       const subdirectoryPath = path.join(parentDirectoryPath, subdirectoryName);
       // if subdirectoryPathe does not end with "failed-genes", add it to the list of subdirectory paths
-      if ( ! subdirectoryPath.endsWith('failed-genes') ) subdirectoryPaths.push(subdirectoryPath);
+      if ( ! subdirectoryPath.endsWith('failed-genes') && ! subdirectoryPath.endsWith('.DS_Store') ) {
+        subdirectoryPaths.push(subdirectoryPath);
+      } 
     });
   }
   return subdirectoryPaths;
@@ -70,13 +75,16 @@ async function getSubdirectoryPathsFromParentDirectoryPaths() {
 // the following methods, until Routes, are based on qd-run-analysis.js in kromosynth-cli
 
 async function getClasses( evoRunDirPath ) {
-  const eliteMap = await getEliteMap( evoRunDirPath, iterationIndex );
-  const classes = Object.keys(eliteMap.cells);
+  const lastCommitIndex = getCommitCount( evoRunDirPath ) - 1;
+  console.log('lastCommitIndex:', lastCommitIndex);
+  const eliteMap = await getEliteMap( evoRunDirPath, lastCommitIndex );
+  const classes = Object.keys(eliteMap.cells).filter( (className) => eliteMap.cells[className].elts.length > 0 ).sort();
   return classes;
 }
 
 async function getEliteMap( evoRunDirPath, iterationIndex, forceCreateCommitIdsList ) {
   const commitId = await getCommitID( evoRunDirPath, iterationIndex, forceCreateCommitIdsList );
+  const evoRunId = evoRunDirPath.split('/').pop();
   const eliteMapString = await spawnCmd(`git -C ${evoRunDirPath} show ${commitId}:elites_${evoRunId}.json`, {}, true);
   const eliteMap = JSON.parse(eliteMapString);
   return eliteMap;
@@ -87,7 +95,7 @@ async function getCommitID( evoRunDirPath, iterationIndex, forceCreateCommitIdsL
   let commitId;
   if( iterationIndex === undefined ) {
     // get last index
-    const commitCount = getCommitCount( commitIdsFilePath );
+    const commitCount = getCommitCount( evoRunDirPath, forceCreateCommitIdsList );
     console.log('commitCount:', commitCount);
     const lastCommitIndex = commitCount - 1;
     commitId = await nthline(lastCommitIndex, commitIdsFilePath);
@@ -97,15 +105,16 @@ async function getCommitID( evoRunDirPath, iterationIndex, forceCreateCommitIdsL
   return commitId;
 }
 
-function getCommitCount( commitIdsFilePath ) {
+function getCommitCount( evoRunDirPath, forceCreateCommitIdsList ) {
+  const commitIdsFilePath = getCommitIdsFilePath( evoRunDirPath, forceCreateCommitIdsList );
   const commitCount = parseInt(runCmd(`wc -l < ${commitIdsFilePath}`));
   return commitCount;
 }
 
 function getCommitIdsFilePath( evoRunDirPath, forceCreateCommitIdsList ) {
   const commitIdsFileName = "commit-ids.txt";
-  const commitIdsFilePath = `${evoRunDirPath}${commitIdsFileName}`;
-  if( forceCreateCommitIdsList || ! fs.existsSync(`${evoRunDirPath}/commit-ids.txt`) ) {
+  const commitIdsFilePath = `${evoRunDirPath}/${commitIdsFileName}`;
+  if( forceCreateCommitIdsList || ! fsSync.existsSync(`${evoRunDirPath}/commit-ids.txt`) ) {
     runCmd(`git -C ${evoRunDirPath} rev-list HEAD --first-parent --reverse > ${commitIdsFilePath}`);
   }
   return commitIdsFilePath;
@@ -118,7 +127,7 @@ function getCommitIdsFilePath( evoRunDirPath, forceCreateCommitIdsList ) {
 ///// Routes
 
 // Route to get all evolution run paths
-app.get('/evolution-runs', async (req, res) => {
+app.get('/evorunpaths', async (req, res) => {
   try {
     const evolutionRuns = await getSubdirectoryPathsFromParentDirectoryPaths();
     res.json(evolutionRuns);
@@ -148,8 +157,7 @@ app.get('/iteration-count', async (req, res) => {
     return res.status(400).json({ error: 'Missing query parameter evoRunDirPath' });
   }
   try {
-    const commitIdsFilePath = getCommitIdsFilePath( evoRunDirPath );
-    const commitCount = getCommitCount( commitIdsFilePath );
+    const commitCount = getCommitCount( evoRunDirPath );
     res.json(commitCount);
   } catch (error) {
     res.status(500).json({ error: 'Failed to get iteration count - ' + error});
@@ -248,3 +256,56 @@ app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
 
+
+
+function runCmd( cmd ) {
+  try {
+    return execSync(cmd).toString();
+  } catch (e) {
+    throw e;
+  }
+}
+
+// https://stackoverflow.com/a/68958420/169858 (not restricted by the shell buffer limitation (as `runCmd*` are))
+function spawnCmd(instruction, spawnOpts = {}, silenceOutput = false) {
+  return new Promise((resolve, reject) => {
+      let errorData = "";
+
+      const [command, ...args] = instruction.split(/\s+/);
+
+      if (process.env.DEBUG_COMMANDS === "true") {
+          console.log(`Executing \`${instruction}\``);
+          console.log("Command", command, "Args", args);
+      }
+
+      const spawnedProcess = spawn(command, args, spawnOpts);
+
+      let data = "";
+
+      spawnedProcess.on("message", console.log);
+
+      spawnedProcess.stdout.on("data", chunk => {
+          if (!silenceOutput) {
+              console.log(chunk.toString());
+          }
+
+          data += chunk.toString();
+      });
+
+      spawnedProcess.stderr.on("data", chunk => {
+          errorData += chunk.toString();
+      });
+
+      spawnedProcess.on("close", function(code) {
+          if (code > 0) {
+              return reject(new Error(`${errorData} (Failed Instruction: ${instruction})`));
+          }
+
+          resolve(data);
+      });
+
+      spawnedProcess.on("error", function(err) {
+          reject(err);
+      });
+  });
+}
