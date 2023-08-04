@@ -51,12 +51,23 @@ async function generateAudioData( audioRenderRequest ) {
     noteDelta,
     velocity,
     reverse,
-    useOvertoneInharmonicityFactors
+    useOvertoneInharmonicityFactors,
+    overrideGenomeDurationNoteDeltaAndVelocity
   } = audioRenderRequest;
   // ... Generate or fetch the audio data ...
   const genomeString = await downloadString(genomeStringUrl);
   console.log('genome string:', genomeString);
   const genome = JSON.parse(genomeString);
+
+  let _duration, _noteDelta, _velocity;
+  if( overrideGenomeDurationNoteDeltaAndVelocity) {
+
+  } else {
+    _duration = duration;
+    _noteDelta = noteDelta;
+    _velocity = velocity;
+  }
+
   const audioContext = await getAudioContext();
   const audioBuffer = await getAudioBufferFromGenomeAndMeta(
     genome,
@@ -69,56 +80,6 @@ async function generateAudioData( audioRenderRequest ) {
   console.log('audio buffer:', audioBuffer);
   return audioBuffer;
 }
-
-// Function to convert audio data to PCM
-// function convertToPCM(audioBuffer) {
-//   const numChannels = audioBuffer.numberOfChannels;
-//   console.log('numChannels:', numChannels);
-//   const numSamples = audioBuffer.length;
-//   console.log('numSamples:', numSamples);
-//   const sampleRate = audioBuffer.sampleRate;
-//   const bitDepth = 16; // 16-bit PCM
-
-//   const pcmData = new ArrayBuffer(numSamples * numChannels * (bitDepth / 8));
-//   const dataView = new DataView(pcmData);
-
-//   for (let channel = 0; channel < numChannels; channel++) {
-//     const channelData = audioBuffer.getChannelData(channel);
-//     const offset = channel * numSamples;
-
-//     for (let sample = 0; sample < numSamples; sample++) {
-//       const pcmValue = Math.max(-1, Math.min(1, channelData[sample])); // Clamp audio samples to the range [-1, 1]
-
-//       if (bitDepth === 16) {
-//         const intValue = pcmValue < 0 ? pcmValue * 0x8000 : pcmValue * 0x7FFF;
-//         dataView.setInt16(offset + sample, intValue, true); // true for little-endian
-//       } else if (bitDepth === 32) {
-//         dataView.setFloat32(offset + sample, pcmValue, true); // true for little-endian
-//       }
-//     }
-//   }
-
-//   return pcmData;
-// }
-
-// function convertToPCM(audioBuffer) {
-//   const numChannels = audioBuffer.numberOfChannels;
-//   console.log('numChannels:', numChannels);
-//   const numSamples = audioBuffer.length;
-//   console.log('numSamples:', numSamples);
-//   const pcmData = new Int16Array(numChannels * numSamples);
-
-//   for (let channel = 0; channel < numChannels; channel++) {
-//     const channelData = audioBuffer.getChannelData(channel);
-
-//     for (let sample = 0; sample < numSamples; sample++) {
-//       const pcmValue = Math.max(-1, Math.min(1, channelData[sample])); // Clamp audio samples to the range [-1, 1]
-//       pcmData[sample * numChannels + channel] = pcmValue * 0x7FFF; // Convert to 16-bit PCM
-//     }
-//   }
-
-//   return pcmData;
-// }
 
 function convertToPCM(audioBuffer) {
   const numChannels = audioBuffer.numberOfChannels;
@@ -144,9 +105,6 @@ function convertToPCM(audioBuffer) {
 
   return pcmData;
 }
-
-
-
 
 async function downloadString(url) {
   try {
