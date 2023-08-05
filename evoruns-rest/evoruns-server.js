@@ -164,31 +164,63 @@ app.get('/iteration-count', async (req, res) => {
   }
 });
 
-// Route to get get genome string for one class, and one iteration, in one evolution run path, where the run path, class and iteration are suppled as query parameters
+// Route to get genome string for one class, and one iteration, in one evolution run path, where the run path, class and iteration are suppled as query parameters
 app.get('/genome-string', async (req, res) => {
   const evoRunDirPath = req.query.evoRunDirPath;
-  const className = req.query.className;
-  const iterationIndex = req.query.iterationIndex;
+  const className = req.query.class;
+  const iterationIndex = parseInt( req.query.generation );
   if( ! evoRunDirPath ) {
     return res.status(400).json({ error: 'Missing query parameter evoRunDirPath' });
   }
   if( ! className ) {
-    return res.status(400).json({ error: 'Missing query parameter className' });
+    return res.status(400).json({ error: 'Missing query parameter class' });
   }
   if( ! iterationIndex ) {
     // TODO: get last iteration index, if not supplied
-    return res.status(400).json({ error: 'Missing query parameter iterationIndex' });
+    return res.status(400).json({ error: 'Missing query parameter generation' });
   }
   try {
     const eliteMap = await getEliteMap( evoRunDirPath, iterationIndex );
-    // TOOD: flesh out
-    const genomeString = eliteMap.cells[className].genome;
-    res.json(genomeString);
+    const genomeId = eliteMap.cells[className].elts[0].g;
+    const genomeString = await readGenomeAndMetaFromDisk( evoRunDirPath.split('/').pop(), genomeId, evoRunDirPath );
+    res.send(genomeString);
   } catch (error) {
     res.status(500).json({ error: 'Failed to get genome string - ' + error});
   }
 });
 
+// Route to get genome metadata for one class, and one iteration, in one evolution run path, where the run path, class and iteration are suppled as query parameters
+app.get('/genome-metadata', async (req, res) => {
+  const evoRunDirPath = req.query.evoRunDirPath;
+  const className = req.query.class;
+  const iterationIndex = parseInt( req.query.generation );
+  if( ! evoRunDirPath ) {
+    return res.status(400).json({ error: 'Missing query parameter evoRunDirPath' });
+  }
+  if( ! className ) {
+    return res.status(400).json({ error: 'Missing query parameter class' });
+  }
+  if( ! iterationIndex ) {
+    // TODO: get last iteration index, if not supplied
+    return res.status(400).json({ error: 'Missing query parameter generation' });
+  }
+  try {
+    const eliteMap = await getEliteMap( evoRunDirPath, iterationIndex );
+    const genomeId = eliteMap.cells[className].elts[0].g;
+    const score = eliteMap.cells[className].elts[0].s;
+    const genomeString = await readGenomeAndMetaFromDisk( evoRunDirPath.split('/').pop(), genomeId, evoRunDirPath );
+    const genomeAndMeta = JSON.parse(genomeString);
+    const tagForCell = genomeAndMeta.genome.tags.find(t => t.tag === className);
+    const { duration, noteDelta, velocity, updated } = tagForCell;
+    let parentGenomeClass;
+    if( genomeAndMeta.genome.parentGenomes && genomeAndMeta.genome.parentGenomes.length > 0 ) {
+      parentGenomeClass = genomeAndMeta.genome.parentGenomes[0].eliteClass;
+    }
+    res.json({ genomeId, score, duration, noteDelta, velocity, updated, parentGenomeClass });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get genome string - ' + error});
+  }
+});
 
 app.get('/todos', verifyFirebaseToken, async (req, res) => {
   if (!req.user) {
@@ -257,6 +289,7 @@ app.listen(PORT, () => {
 });
 
 
+///// functions adapted from qd-common.js in kromosynth-cli
 
 function runCmd( cmd ) {
   try {
@@ -308,4 +341,22 @@ function spawnCmd(instruction, spawnOpts = {}, silenceOutput = false) {
           reject(err);
       });
   });
+}
+
+async function readGenomeAndMetaFromDisk( evolutionRunId, genomeId, evoRunDirPath ) {
+  let genomeJSONString;
+  try {
+    const genomeKey = getGenomeKey(evolutionRunId, genomeId);
+    const genomeFilePath = `${evoRunDirPath}/${genomeKey}.json`;
+    if( fsSync.existsSync(genomeFilePath) ) {
+      genomeJSONString = fsSync.readFileSync(genomeFilePath, 'utf8');
+    }
+  } catch( err ) {
+    console.error("readGenomeFromDisk: ", err);
+  }
+  return genomeJSONString;
+}
+
+function getGenomeKey( evolutionRunId, genomeId ) {
+  return `genome_${evolutionRunId}_${genomeId}`;
 }

@@ -19,7 +19,13 @@ wsServer.on('request', (request) => {
 
       if (data.type === 'get_audio_data') {
         // Process the request for audio data here
-        const audioData = await generateAudioData(data);
+        let audioData;
+        try {
+          audioData = await generateAudioData(data);
+        } catch( error ) {
+          console.error(error);
+        }
+        if( ! audioData ) return;
 
         // Convert the audio data to PCM (assuming audioData is already in the proper format)
         const pcmData = convertToPCM(audioData);
