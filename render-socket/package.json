@@ -17,8 +17,6 @@
   },
   "homepage": "https://github.com/synth-is/kromosynth-render#readme",
   "dependencies": {
-    "@grpc/grpc-js": "^1.8.17",
-    "@grpc/proto-loader": "^0.7.7",
     "kromosynth": "^1.0.9",
     "node-fetch": "^3.3.1",
     "node-web-audio-api": "0.11.0",

@@ -25,14 +25,16 @@ wsServer.on('request', (request) => {
         } catch( error ) {
           console.error(error);
         }
-        if( ! audioData ) return;
-
-        // Convert the audio data to PCM (assuming audioData is already in the proper format)
-        const pcmData = convertToPCM(audioData);
-        console.log('pcmData:', pcmData);
-        // Send the audio data back to the client
-        const buffer = Buffer.from(pcmData);
-        connection.sendBytes(buffer);
+        if( audioData ) {
+          // Convert the audio data to PCM (assuming audioData is already in the proper format)
+          const pcmData = convertToPCM(audioData);
+          console.log('pcmData:', pcmData);
+          // Send the audio data back to the client
+          const buffer = Buffer.from(pcmData);
+          connection.sendBytes(buffer);
+        } else {
+          connection.sendBytes(Buffer.from([]));
+        }
       } else {
         console.log('Unknown message type:', data.type);
       }
@@ -49,7 +51,7 @@ server.listen(PORT, () => {
   console.log(`WebSocket server listening on port ${PORT}`);
 });
 
-// Function to generate or fetch audio data (you need to implement this based on your use case)
+// Function to generate or fetch audio data
 async function generateAudioData( audioRenderRequest ) {
   const {
     genomeStringUrl,
@@ -62,7 +64,8 @@ async function generateAudioData( audioRenderRequest ) {
   } = audioRenderRequest;
   // ... Generate or fetch the audio data ...
   const genomeString = await downloadString(genomeStringUrl);
-  console.log('genome string:', genomeString);
+  console.log('genomeStringUrl:', genomeStringUrl);
+  // console.log('genome string:', genomeString);
   const genome = JSON.parse(genomeString);
 
   let _duration, _noteDelta, _velocity;
@@ -74,13 +77,13 @@ async function generateAudioData( audioRenderRequest ) {
     _velocity = velocity;
   }
 
-  const audioContext = await getAudioContext();
+  // const audioContext = await getAudioContext();
   const audioBuffer = await getAudioBufferFromGenomeAndMeta(
     genome,
     duration, noteDelta, velocity, reverse,
     false, // asDataArray
     getNewOfflineAudioContext( duration ),
-    audioContext,
+    getAudioContext(),
     useOvertoneInharmonicityFactors
   );
   console.log('audio buffer:', audioBuffer);
