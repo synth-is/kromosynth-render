@@ -47,20 +47,20 @@ const verifyFirebaseToken = async (req, res, next) => {
   }
 };
 
-
+const BASE_PATH = '/Users/bjornpjo';
 const parentDirectoryPaths = [
-  '/Users/bjornpjo/QD-FOX/QD/evoruns/conf-duration_delta_pitch_combinations-singleCellWin',
-  '/Users/bjornpjo/QD-FOX/QD/evoruns/conf-single-class-runs',
-  '/Users/bjornpjo/QD-FOX/QD/evoruns/conf-single-class-runs_112-dur-pitch-vel-comb',
-  '/Users/bjornpjo/QD-FOX/QD/evoruns/conf-static_mutation_rate_combinations_-_delete_rates-singleCellWin',
-  '/Users/bjornpjo/QD-FOX/QD/evoruns/conf-static_mutation_rate_combinations-singleCellWin',
+  '/QD-FOX/QD/evoruns/conf-duration_delta_pitch_combinations-singleCellWin',
+  '/QD-FOX/QD/evoruns/conf-single-class-runs',
+  '/QD-FOX/QD/evoruns/conf-single-class-runs_112-dur-pitch-vel-comb',
+  '/QD-FOX/QD/evoruns/conf-static_mutation_rate_combinations_-_delete_rates-singleCellWin',
+  '/QD-FOX/QD/evoruns/conf-static_mutation_rate_combinations-singleCellWin',
 ];
 
 // From a list of parent directory paths, read all subdirectory paths from disk and return them as a list
 async function getSubdirectoryPathsFromParentDirectoryPaths() {
   const subdirectoryPaths = [];
   for( const parentDirectoryPath of parentDirectoryPaths ) {
-    const subdirectoryNames = await fs.readdir(parentDirectoryPath);
+    const subdirectoryNames = await fs.readdir(BASE_PATH+parentDirectoryPath);
     subdirectoryNames.forEach( (subdirectoryName) => {
       const subdirectoryPath = path.join(parentDirectoryPath, subdirectoryName);
       // if subdirectoryPathe does not end with "failed-genes", add it to the list of subdirectory paths
@@ -143,7 +143,7 @@ app.get('/classes', async (req, res) => {
     return res.status(400).json({ error: 'Missing query parameter evoRunDirPath' });
   }
   try {
-    const classes = await getClasses( evoRunDirPath );
+    const classes = await getClasses( BASE_PATH+evoRunDirPath );
     res.json(classes);
   } catch (error) {
     res.status(500).json({ error: 'Failed to get classes - ' + error});
@@ -157,7 +157,7 @@ app.get('/iteration-count', async (req, res) => {
     return res.status(400).json({ error: 'Missing query parameter evoRunDirPath' });
   }
   try {
-    const commitCount = getCommitCount( evoRunDirPath );
+    const commitCount = getCommitCount( BASE_PATH+evoRunDirPath );
     res.json(commitCount);
   } catch (error) {
     res.status(500).json({ error: 'Failed to get iteration count - ' + error});
@@ -180,9 +180,9 @@ app.get('/genome-string', async (req, res) => {
     return res.status(400).json({ error: 'Missing query parameter generation' });
   }
   try {
-    const eliteMap = await getEliteMap( evoRunDirPath, iterationIndex );
+    const eliteMap = await getEliteMap( BASE_PATH+evoRunDirPath, iterationIndex );
     const genomeId = eliteMap.cells[className].elts[0].g;
-    const genomeString = await readGenomeAndMetaFromDisk( evoRunDirPath.split('/').pop(), genomeId, evoRunDirPath );
+    const genomeString = await readGenomeAndMetaFromDisk( evoRunDirPath.split('/').pop(), genomeId, BASE_PATH+evoRunDirPath );
     res.send(genomeString);
   } catch (error) {
     res.status(500).json({ error: 'Failed to get genome string - ' + error});
@@ -205,10 +205,10 @@ app.get('/genome-metadata', async (req, res) => {
     return res.status(400).json({ error: 'Missing query parameter generation' });
   }
   try {
-    const eliteMap = await getEliteMap( evoRunDirPath, iterationIndex );
+    const eliteMap = await getEliteMap( BASE_PATH+evoRunDirPath, iterationIndex );
     const genomeId = eliteMap.cells[className].elts[0].g;
     const score = eliteMap.cells[className].elts[0].s;
-    const genomeString = await readGenomeAndMetaFromDisk( evoRunDirPath.split('/').pop(), genomeId, evoRunDirPath );
+    const genomeString = await readGenomeAndMetaFromDisk( evoRunDirPath.split('/').pop(), genomeId, BASE_PATH+evoRunDirPath );
     const genomeAndMeta = JSON.parse(genomeString);
     const tagForCell = genomeAndMeta.genome.tags.find(t => t.tag === className);
     const { duration, noteDelta, velocity, updated } = tagForCell;
@@ -220,67 +220,6 @@ app.get('/genome-metadata', async (req, res) => {
     res.json({ genomeId, score, duration, noteDelta, velocity, updated, parentGenomeClass, tags });
   } catch (error) {
     res.status(500).json({ error: 'Failed to get genome string - ' + error});
-  }
-});
-
-app.get('/todos', verifyFirebaseToken, async (req, res) => {
-  if (!req.user) {
-    return res.status(403).json({ error: 'Unauthorized' });
-  }
-  console.log('req.user:', req.user);
-  try {
-    const snapshot = await db.collection('todos').get();
-    const todos = [];
-    snapshot.forEach((doc) => {
-      todos.push({ id: doc.id, ...doc.data() });
-    });
-    res.json(todos);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to get todos' });
-  }
-});
-
-app.post('/todos', verifyFirebaseToken, async (req, res) => {
-  if (!req.user) {
-    return res.status(403).json({ error: 'Unauthorized' });
-  }
-
-  const newTodo = req.body;
-  try {
-    const docRef = await db.collection('todos').add(newTodo);
-    const createdTodo = { id: docRef.id, ...newTodo };
-    res.status(201).json(createdTodo);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to create todo' });
-  }
-});
-
-app.put('/todos/:id', verifyFirebaseToken, async (req, res) => {
-  if (!req.user) {
-    return res.status(403).json({ error: 'Unauthorized' });
-  }
-
-  const todoId = req.params.id;
-  const updatedTodo = req.body;
-  try {
-    await db.collection('todos').doc(todoId).update(updatedTodo);
-    res.json(updatedTodo);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to update todo' });
-  }
-});
-
-app.delete('/todos/:id', verifyFirebaseToken, async (req, res) => {
-  if (!req.user) {
-    return res.status(403).json({ error: 'Unauthorized' });
-  }
-
-  const todoId = req.params.id;
-  try {
-    await db.collection('todos').doc(todoId).delete();
-    res.sendStatus(204);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to delete todo' });
   }
 });
 
