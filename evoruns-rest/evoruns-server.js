@@ -212,11 +212,12 @@ app.get('/genome-metadata', async (req, res) => {
     const genomeAndMeta = JSON.parse(genomeString);
     const tagForCell = genomeAndMeta.genome.tags.find(t => t.tag === className);
     const { duration, noteDelta, velocity, updated } = tagForCell;
+    const tags = genomeAndMeta.genome.tags.map( t => t.tag );
     let parentGenomeClass;
     if( genomeAndMeta.genome.parentGenomes && genomeAndMeta.genome.parentGenomes.length > 0 ) {
       parentGenomeClass = genomeAndMeta.genome.parentGenomes[0].eliteClass;
     }
-    res.json({ genomeId, score, duration, noteDelta, velocity, updated, parentGenomeClass });
+    res.json({ genomeId, score, duration, noteDelta, velocity, updated, parentGenomeClass, tags });
   } catch (error) {
     res.status(500).json({ error: 'Failed to get genome string - ' + error});
   }
