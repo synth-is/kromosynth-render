@@ -28,7 +28,7 @@ wsServer.on('request', (request) => {
         if( audioData ) {
           // Convert the audio data to PCM (assuming audioData is already in the proper format)
           const pcmData = convertToPCM(audioData);
-          console.log('pcmData:', pcmData);
+          // console.log('pcmData:', pcmData);
           // Send the audio data back to the client
           const buffer = Buffer.from(pcmData);
           connection.sendBytes(buffer);
@@ -86,7 +86,7 @@ async function generateAudioData( audioRenderRequest ) {
     getAudioContext(),
     useOvertoneInharmonicityFactors
   );
-  console.log('audio buffer:', audioBuffer);
+  // console.log('audio buffer:', audioBuffer);
   return audioBuffer;
 }
 
@@ -101,7 +101,7 @@ function convertToPCM(audioBuffer) {
   for (let channel = 0; channel < numChannels; channel++) {
     const channelData = audioBuffer.getChannelData(channel);
 
-    log('channelData:', channelData);
+    // log('channelData:', channelData);
 
     for (let sample = 0; sample < numSamples; sample++) {
       const pcmSample = Math.max(-1, Math.min(1, channelData[sample])) * 0x7FFF; // Convert to 16-bit PCM
