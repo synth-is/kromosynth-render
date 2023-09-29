@@ -1,8 +1,9 @@
 import { server as WebSocket } from 'websocket';
 import { createServer } from 'http';
-import { getAudioContext, getNewOfflineAudioContext } from './rendering-common.js';
+import { 
+  generateAudioDataFromGenomeString
+} from '../util/rendering-common.js';
 import fetch from 'node-fetch';
-import { getAudioBufferFromGenomeAndMeta } from 'kromosynth';
 import { log } from 'console';
 
 // Create a plain HTTP server (not serving any additional files)
@@ -64,30 +65,16 @@ async function generateAudioData( audioRenderRequest ) {
   } = audioRenderRequest;
   // ... Generate or fetch the audio data ...
   const genomeString = await downloadString(genomeStringUrl);
-  console.log('genomeStringUrl:', genomeStringUrl);
-  // console.log('genome string:', genomeString);
-  const genome = JSON.parse(genomeString);
 
-  let _duration, _noteDelta, _velocity;
-  if( overrideGenomeDurationNoteDeltaAndVelocity) {
-
-  } else {
-    _duration = duration;
-    _noteDelta = noteDelta;
-    _velocity = velocity;
-  }
-
-  // const audioContext = await getAudioContext();
-  const audioBuffer = await getAudioBufferFromGenomeAndMeta(
-    genome,
-    duration, noteDelta, velocity, reverse,
-    false, // asDataArray
-    getNewOfflineAudioContext( duration ),
-    getAudioContext(),
-    useOvertoneInharmonicityFactors
+  return generateAudioDataFromGenomeString(
+    genomeString,
+    duration,
+    noteDelta,
+    velocity,
+    reverse,
+    useOvertoneInharmonicityFactors,
+    overrideGenomeDurationNoteDeltaAndVelocity
   );
-  // console.log('audio buffer:', audioBuffer);
-  return audioBuffer;
 }
 
 function convertToPCM(audioBuffer) {

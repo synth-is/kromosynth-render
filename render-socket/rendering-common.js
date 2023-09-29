@@ -1,5 +1,6 @@
 import NodeWebAudioAPI from 'node-web-audio-api';
 const { AudioContext, OfflineAudioContext } = NodeWebAudioAPI;
+import { getAudioBufferFromGenomeAndMeta } from 'kromosynth';
 
 // TODO: copied from kromosynth-cli - possibly move to a common package?
 
@@ -27,4 +28,45 @@ export function getNewOfflineAudioContext( duration ) {
 	// offlineAudioContext.destination.channelCount = 1;
 	// offlineAudioContext.destination.channelInterpretation = 'discrete';
 	return offlineAudioContext;
+}
+
+export async function generateAudioDataFromGenomeString( 
+	genomeString,
+	duration,
+	noteDelta,
+	velocity,
+	reverse,
+	useOvertoneInharmonicityFactors,
+	overrideGenomeDurationNoteDeltaAndVelocity
+) {
+  const genome = JSON.parse(genomeString);
+  let _duration, _noteDelta, _velocity;
+  if( overrideGenomeDurationNoteDeltaAndVelocity) {
+
+  } else {
+    _duration = duration;
+    _noteDelta = noteDelta;
+    _velocity = velocity;
+  }
+
+	const genomeAndMeta = {
+		genome,
+		duration: _duration,
+		noteDelta: _noteDelta,
+		velocity: _velocity,
+		reverse,
+		useOvertoneInharmonicityFactors
+	};
+
+  // const audioContext = await getAudioContext();
+  const audioBuffer = await getAudioBufferFromGenomeAndMeta(
+    genomeAndMeta,
+    duration, noteDelta, velocity, reverse,
+    false, // asDataArray
+    getNewOfflineAudioContext( duration ),
+    getAudioContext(),
+    useOvertoneInharmonicityFactors
+  );
+  // console.log('audio buffer:', audioBuffer);
+  return audioBuffer;
 }
