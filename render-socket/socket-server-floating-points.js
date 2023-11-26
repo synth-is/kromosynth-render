@@ -23,11 +23,11 @@ process.on('SIGINT', () => process.exit(1)); // so it can be stopped with Ctrl-C
 const wss = new WebSocketServer({ host, port });
 
 wss.on("connection", async function connection(ws) {
-  console.log("connection");
+  // console.log("connection");
   ws.on('error', console.error);
   ws.on("message", async function incoming(message) {
     const messageParsed = JSON.parse(message);
-    console.log("received: %s", messageParsed);
+    // console.log("received: %s", messageParsed);
     const {
       genomeString,
       duration,
