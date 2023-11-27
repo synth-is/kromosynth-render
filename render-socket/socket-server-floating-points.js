@@ -1,6 +1,8 @@
 import { WebSocketServer } from "ws";
 import { generateAudioDataFromGenomeString } from "./rendering-common.js";
 import parseArgs from 'minimist';
+import os from "os";
+import fs from "fs";
 const argv = parseArgs(process.argv.slice(2));
 let port;
 let host;
@@ -10,8 +12,9 @@ if( argv.hostInfoFilePath ) {
   port = 30051;
   argv.hostInfoFilePath.substring(argv.hostInfoFilePath.lastIndexOf("host-")+5).split("-").reverse().forEach( (i, idx) => port += parseInt(i) * (idx+1*10) );
   host = os.hostname();
-  console.log("--- hostname:", host);
-  fs.writeFile(argv.hostInfoFilePath, host, () => console.log(`Wrote hostname to ${argv.hostInfoFilePath}`));
+  const hostname = `${host}:${port}`;
+  console.log("--- hostname:", hostname);
+  fs.writeFile(argv.hostInfoFilePath, hostname, () => console.log(`Wrote hostname to ${argv.hostInfoFilePath}`));
 } else {
   port = argv.port || process.env.PORT || '30051';
   host = "0.0.0.0";
