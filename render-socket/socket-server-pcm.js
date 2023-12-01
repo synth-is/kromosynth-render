@@ -2,7 +2,7 @@ import { server as WebSocket } from 'websocket';
 import { createServer } from 'http';
 import { 
   generateAudioDataFromGenomeString
-} from '../util/rendering-common.js';
+} from './rendering-common.js';
 import fetch from 'node-fetch';
 import { log } from 'console';
 
@@ -61,7 +61,9 @@ async function generateAudioData( audioRenderRequest ) {
     velocity,
     reverse,
     useOvertoneInharmonicityFactors,
-    overrideGenomeDurationNoteDeltaAndVelocity
+    overrideGenomeDurationNoteDeltaAndVelocity,
+    useGPU,
+    antiAliasing
   } = audioRenderRequest;
   // ... Generate or fetch the audio data ...
   const genomeString = await downloadString(genomeStringUrl);
@@ -73,7 +75,9 @@ async function generateAudioData( audioRenderRequest ) {
     velocity,
     reverse,
     useOvertoneInharmonicityFactors,
-    overrideGenomeDurationNoteDeltaAndVelocity
+    overrideGenomeDurationNoteDeltaAndVelocity,
+    useGPU,
+    antiAliasing
   );
 }
 

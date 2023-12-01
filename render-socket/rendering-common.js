@@ -37,7 +37,9 @@ export async function generateAudioDataFromGenomeString(
 	velocity,
 	reverse,
 	useOvertoneInharmonicityFactors,
-	overrideGenomeDurationNoteDeltaAndVelocity
+	overrideGenomeDurationNoteDeltaAndVelocity,
+	useGPU,
+	antiAliasing
 ) {
   const genome = JSON.parse(genomeString);
   let _duration, _noteDelta, _velocity;
@@ -50,7 +52,7 @@ export async function generateAudioDataFromGenomeString(
   }
 
 	const genomeAndMeta = {
-		genome,
+		genome: genome.genome || genome, // TODO: oh this is a hack to handle different wrappings of genome
 		duration: _duration,
 		noteDelta: _noteDelta,
 		velocity: _velocity,
@@ -65,7 +67,9 @@ export async function generateAudioDataFromGenomeString(
     false, // asDataArray
     getNewOfflineAudioContext( duration ),
     getAudioContext(),
-    useOvertoneInharmonicityFactors
+    useOvertoneInharmonicityFactors,
+		useGPU,
+		antiAliasing
   );
   // console.log('audio buffer:', audioBuffer);
   return audioBuffer;
