@@ -39,7 +39,8 @@ export async function generateAudioDataFromGenomeString(
 	useOvertoneInharmonicityFactors,
 	overrideGenomeDurationNoteDeltaAndVelocity,
 	useGPU,
-	antiAliasing
+	antiAliasing,
+	frequencyUpdatesApplyToAllPathcNetworkOutputs
 ) {
   const genome = JSON.parse(genomeString);
   let _duration, _noteDelta, _velocity;
@@ -69,7 +70,8 @@ export async function generateAudioDataFromGenomeString(
     getAudioContext(),
     useOvertoneInharmonicityFactors,
 		useGPU,
-		antiAliasing
+		antiAliasing,
+		frequencyUpdatesApplyToAllPathcNetworkOutputs
   );
   // console.log('audio buffer:', audioBuffer);
   return audioBuffer;

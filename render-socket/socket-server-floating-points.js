@@ -39,6 +39,7 @@ wss.on("connection", async function connection(ws) {
       velocity,
       useGPU,
       antiAliasing,
+      frequencyUpdatesApplyToAllPathcNetworkOutputs
     } = messageParsed;
     const audioBuffer = await generateAudioDataFromGenomeString(
       genomeString,
@@ -49,7 +50,8 @@ wss.on("connection", async function connection(ws) {
       true, // useOvertoneInharmonicityFactors
       false, // overrideGenomeDurationNoteDeltaAndVelocity
       useGPU,
-      antiAliasing
+      antiAliasing,
+      frequencyUpdatesApplyToAllPathcNetworkOutputs
     ).catch( error => {
       console.error(error);
     });
