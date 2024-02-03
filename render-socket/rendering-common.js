@@ -7,8 +7,8 @@ import { getAudioBufferFromGenomeAndMeta } from 'kromosynth';
 let audioCtx;
 export const SAMPLE_RATE = 48000;
 
-export function getAudioContext() {
-	if( ! audioCtx ) audioCtx = new AudioContext({sampleRate: SAMPLE_RATE});
+export function getAudioContext( sampleRate = SAMPLE_RATE) {
+	if( ! audioCtx ) audioCtx = new AudioContext({sampleRate});
 	
 	// https://github.com/ircam-ismm/node-web-audio-api/issues/23#issuecomment-1636134712
 	// audioCtx.destination.channelCount = 2;
@@ -18,12 +18,12 @@ export function getAudioContext() {
 	return audioCtx;
 }
 
-export function getNewOfflineAudioContext( duration ) {
+export function getNewOfflineAudioContext( duration, sampleRate = SAMPLE_RATE ) {
 	const offlineAudioContext = new OfflineAudioContext({
 		numberOfChannels: 2,
-		length: Math.round(SAMPLE_RATE * duration),
+		length: Math.round(sampleRate * duration),
 		// length: SAMPLE_RATE * duration,
-		sampleRate: SAMPLE_RATE,
+		sampleRate
 	});
 	// offlineAudioContext.destination.channelCount = 1;
 	// offlineAudioContext.destination.channelInterpretation = 'discrete';
@@ -40,7 +40,8 @@ export async function generateAudioDataFromGenomeString(
 	overrideGenomeDurationNoteDeltaAndVelocity,
 	useGPU,
 	antiAliasing,
-	frequencyUpdatesApplyToAllPathcNetworkOutputs
+	frequencyUpdatesApplyToAllPathcNetworkOutputs,
+	sampleRate
 ) {
   const genome = JSON.parse(genomeString);
   let _duration, _noteDelta, _velocity;
@@ -66,8 +67,8 @@ export async function generateAudioDataFromGenomeString(
     genomeAndMeta,
     duration, noteDelta, velocity, reverse,
     false, // asDataArray
-    getNewOfflineAudioContext( duration ),
-    getAudioContext(),
+    getNewOfflineAudioContext( duration, sampleRate ),
+    getAudioContext( sampleRate ),
     useOvertoneInharmonicityFactors,
 		useGPU,
 		antiAliasing,

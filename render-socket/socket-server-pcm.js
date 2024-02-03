@@ -64,7 +64,8 @@ async function generateAudioData( audioRenderRequest ) {
     overrideGenomeDurationNoteDeltaAndVelocity,
     useGPU,
     antiAliasing,
-    frequencyUpdatesApplyToAllPathcNetworkOutputs
+    frequencyUpdatesApplyToAllPathcNetworkOutputs,
+    sampleRate
   } = audioRenderRequest;
   // ... Generate or fetch the audio data ...
   const genomeString = await downloadString(genomeStringUrl);
@@ -79,7 +80,8 @@ async function generateAudioData( audioRenderRequest ) {
     overrideGenomeDurationNoteDeltaAndVelocity,
     useGPU,
     antiAliasing,
-    frequencyUpdatesApplyToAllPathcNetworkOutputs
+    frequencyUpdatesApplyToAllPathcNetworkOutputs,
+    sampleRate
   );
 }
 
