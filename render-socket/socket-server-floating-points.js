@@ -23,11 +23,18 @@ const processTitle = argv.processTitle || 'kromosynth-render-socket-server';
 process.title = processTitle;
 process.on('SIGINT', () => process.exit(1)); // so it can be stopped with Ctrl-C
 
-const wss = new WebSocketServer({ host, port });
+const wss = new WebSocketServer({ 
+  host, port,
+  maxPayload: 100 * 1024 * 1024 // 100 MB
+});
 
 wss.on("connection", async function connection(ws) {
   // console.log("connection");
-  ws.on('error', console.error);
+  ws.on('error', function(err) {
+    console.error("WebSocket error:", err);
+    ws.send( JSON.stringify({error: err}) );
+    ws.close();
+  });
   ws.on("message", async function incoming(message) {
     const messageParsed = JSON.parse(message);
     // console.log("received: %s", messageParsed);
