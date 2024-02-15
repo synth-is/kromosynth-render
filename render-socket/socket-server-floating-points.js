@@ -38,7 +38,7 @@ wss.on("connection", async function connection(ws) {
   ws.on("message", async function incoming(message) {
     const messageParsed = JSON.parse(message);
     // console.log("received: %s", messageParsed);
-    console.log(`rendering sound from genome at duration ${messageParsed.duration} with noteDelta ${messageParsed.noteDelta} and velocity ${messageParsed.velocity}`);
+    console.log(`rendering sound from genome at duration ${messageParsed.duration} with noteDelta ${messageParsed.noteDelta}, velocity ${messageParsed.velocity} and sample rate ${messageParsed.sampleRate}...`);
     const {
       genomeString,
       duration,
