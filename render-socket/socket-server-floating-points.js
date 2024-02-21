@@ -3,14 +3,14 @@ import { generateAudioDataFromGenomeString } from "./rendering-common.js";
 import parseArgs from 'minimist';
 import os from "os";
 import fs from "fs";
+import crypto from 'crypto';
 const argv = parseArgs(process.argv.slice(2));
 let port;
 let host;
 if( argv.hostInfoFilePath ) {
   // automatically assign port and write the info to the specified file path
   console.log("--- argv.hostInfoFilePath:", argv.hostInfoFilePath);
-  port = 30051;
-  argv.hostInfoFilePath.substring(argv.hostInfoFilePath.lastIndexOf("host-")+5).split("-").reverse().forEach( (i, idx) => port += parseInt(i) * (idx+1*10) );
+  port = filepathToPort( argv.hostInfoFilePath );
   host = os.hostname();
   const hostname = `${host}:${port}`;
   console.log("--- hostname:", hostname);
@@ -76,3 +76,16 @@ wss.on("connection", async function connection(ws) {
 });
 
 console.log(`Rendering WebSocket server listening on port ${port}`);
+
+function filepathToPort( filepath ) {
+  // Using the crypto module to generate a hash of the filepath
+  let hash = crypto.createHash('md5').update(filepath).digest("hex");
+
+  // Converting the first 8 charachters of the hashed string into a number
+  let shortHash = parseInt(hash.substring(0, 8), 16);
+
+  // Ensuring the port number falls within the dynamic or private port range
+  let port = 1024 + shortHash % (65535 - 1024);
+
+  return port;
+}
