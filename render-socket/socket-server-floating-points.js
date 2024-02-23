@@ -4,13 +4,14 @@ import parseArgs from 'minimist';
 import os from "os";
 import fs from "fs";
 import crypto from 'crypto';
+import net from 'net';
 const argv = parseArgs(process.argv.slice(2));
 let port;
 let host;
 if( argv.hostInfoFilePath ) {
   // automatically assign port and write the info to the specified file path
   console.log("--- argv.hostInfoFilePath:", argv.hostInfoFilePath);
-  port = filepathToPort( argv.hostInfoFilePath );
+  port = await filepathToPort( argv.hostInfoFilePath );
   host = os.hostname();
   const hostname = `${host}:${port}`;
   console.log("--- hostname:", hostname);
@@ -77,17 +78,28 @@ wss.on("connection", async function connection(ws) {
 
 console.log(`Rendering WebSocket server listening on port ${port}`);
 
-function filepathToPort( filepath ) {
-  // Using the crypto module to generate a hash of the filepath
-  let hash = crypto.createHash('md5').update(filepath).digest("hex");
 
-  // Converting the first 8 charachters of the hashed string into a number
+function isPortTaken(port) {
+  return new Promise((resolve) => {
+      const server = net.createServer()
+          .once('error', () => resolve(true))
+          .once('listening', () => server.once('close', () => resolve(false)).close())
+          .listen(port);
+  });
+}
+
+async function filepathToPort(filepath, variation = 0) {
+  let filepathVariation = filepath + variation.toString();
+  let hash = crypto.createHash('md5').update(filepathVariation).digest("hex");
   let shortHash = parseInt(hash.substring(0, 8), 16);
+  let port = 1024 + shortHash % (65535 - 1024);
+  let isTaken = await isPortTaken(port);
 
-  let portLowerBound = 8192; // 1024;
-  let portUpperBound = 65535;
-  // Ensuring the port number falls within the dynamic or private port range
-  let port = portLowerBound + shortHash % (portUpperBound - portLowerBound);
-
-  return port;
+  if(isTaken) {
+      console.log(`--- filepathToPort(${filepath}): port ${port} taken`)
+      return await filepathToPort(filepath, variation + 1);
+  } else {
+      console.log(`--- filepathToPort(${filepath}): port ${port} available`);
+      return port;
+  }
 }
