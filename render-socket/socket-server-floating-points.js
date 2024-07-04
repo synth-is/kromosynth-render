@@ -64,6 +64,7 @@ wss.on("connection", async function connection(ws) {
       sampleRate
     ).catch( error => {
       console.error(error);
+      ws.send( null );
     });
     let buffer;
     if( audioBuffer ) {
