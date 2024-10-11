@@ -67,7 +67,7 @@ export async function generateAudioDataFromGenomeString(
     genomeAndMeta,
     duration, noteDelta, velocity, reverse,
     false, // asDataArray
-    getNewOfflineAudioContext( duration, sampleRate ),
+    undefined, // getNewOfflineAudioContext( duration, sampleRate ),
     getAudioContext( sampleRate ),
     useOvertoneInharmonicityFactors,
 		useGPU,
