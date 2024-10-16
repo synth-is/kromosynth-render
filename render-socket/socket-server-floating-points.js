@@ -15,7 +15,14 @@ if( argv.hostInfoFilePath ) {
   host = os.hostname();
   const hostname = `${host}:${port}`;
   console.log("--- hostname:", hostname);
-  fs.writeFile(argv.hostInfoFilePath, hostname, () => console.log(`Wrote hostname to ${argv.hostInfoFilePath}`));
+  let hostInfoFilePath;
+  if( process.env.pm_id ) { // being managed by PM2
+    hostInfoFilePath = `${argv.hostInfoFilePath}${parseInt(process.env.pm_id) + 1}`;
+  } else {
+    hostInfoFilePath = argv.hostInfoFilePath;
+  }
+  console.log("process.env.PM2_HOME", process.env.PM2_HOME);
+  fs.writeFile(hostInfoFilePath, hostname, () => console.log(`Wrote hostname to ${hostInfoFilePath}`));
 } else {
   port = argv.port || process.env.PORT || '30051';
   host = "0.0.0.0";
