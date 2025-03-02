@@ -41,7 +41,10 @@ export async function generateAudioDataFromGenomeString(
 	useGPU,
 	antiAliasing,
 	frequencyUpdatesApplyToAllPathcNetworkOutputs,
-	sampleRate
+	sampleRate,
+	asDataArray,
+	sampleCountToActivate,
+	sampleOffset,
 ) {
   const genome = JSON.parse(genomeString);
   let _duration, _noteDelta, _velocity;
@@ -66,13 +69,15 @@ export async function generateAudioDataFromGenomeString(
   const audioBuffer = await getAudioBufferFromGenomeAndMeta(
     genomeAndMeta,
     duration, noteDelta, velocity, reverse,
-    false, // asDataArray
+    asDataArray,
     undefined, // getNewOfflineAudioContext( duration, sampleRate ),
     getAudioContext( sampleRate ),
     useOvertoneInharmonicityFactors,
 		useGPU,
 		antiAliasing,
-		frequencyUpdatesApplyToAllPathcNetworkOutputs
+		frequencyUpdatesApplyToAllPathcNetworkOutputs,
+		sampleCountToActivate,
+    sampleOffset,
   );
   // console.log('audio buffer:', audioBuffer);
   return audioBuffer;

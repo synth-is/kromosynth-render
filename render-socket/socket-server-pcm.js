@@ -5,6 +5,7 @@ import {
 } from './rendering-common.js';
 import fetch from 'node-fetch';
 import { log } from 'console';
+import zlib from 'zlib'; // Add zlib for decompression
 
 // Create a plain HTTP server (not serving any additional files)
 const server = createServer();
@@ -68,8 +69,13 @@ async function generateAudioData( audioRenderRequest ) {
     sampleRate
   } = audioRenderRequest;
   // ... Generate or fetch the audio data ...
-  const genomeString = await downloadString(genomeStringUrl);
+  let genomeString = await downloadString(genomeStringUrl);
 
+  // Check if the genomeStringUrl points to a .gz file and decompress if necessary
+  if (genomeStringUrl.endsWith('.gz')) {
+    genomeString = await decompressString(genomeString);
+  }
+  // console.log('genomeString:', genomeString);
   return generateAudioDataFromGenomeString(
     genomeString,
     duration,
@@ -111,13 +117,27 @@ function convertToPCM(audioBuffer) {
 }
 
 async function downloadString(url) {
+  console.log('Downloading string from:', url);
   try {
     const response = await fetch(url);
     if (!response.ok) {
       throw new Error(`Request failed with status code ${response.status}`);
     }
-    return await response.text();
+    const arrayBuffer = await response.arrayBuffer(); // Use arrayBuffer() instead of buffer()
+    return Buffer.from(arrayBuffer); // Convert ArrayBuffer to Buffer
   } catch (error) {
     throw new Error(`Error downloading string: ${error.message}`);
   }
+}
+
+// Function to decompress a gzipped string
+async function decompressString(buffer) {
+  return new Promise((resolve, reject) => {
+    zlib.gunzip(buffer, (err, decompressedBuffer) => {
+      if (err) {
+        return reject(new Error(`Error decompressing string: ${err.message}`));
+      }
+      resolve(decompressedBuffer.toString());
+    });
+  });
 }

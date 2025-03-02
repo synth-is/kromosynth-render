@@ -55,7 +55,9 @@ wss.on("connection", async function connection(ws) {
       useGPU,
       antiAliasing,
       frequencyUpdatesApplyToAllPathcNetworkOutputs,
-      sampleRate
+      sampleRate,
+      sampleCountToActivate,
+      sampleOffset,
     } = messageParsed;
     const audioBuffer = await generateAudioDataFromGenomeString(
       genomeString,
@@ -68,14 +70,17 @@ wss.on("connection", async function connection(ws) {
       useGPU,
       antiAliasing,
       frequencyUpdatesApplyToAllPathcNetworkOutputs,
-      sampleRate
+      sampleRate,
+      true, // asDataArray
+      sampleCountToActivate,
+      sampleOffset,
     ).catch( error => {
       console.error(error);
       ws.send( null );
     });
     let buffer;
     if( audioBuffer ) {
-      const audioData = new Float32Array(audioBuffer.getChannelData(0)); // new Float32Array as the result from .getChannelData() seems to become detatched
+      const audioData = audioBuffer; // new Float32Array(audioBuffer.getChannelData(0)); // new Float32Array as the result from .getChannelData() seems to become detatched
       buffer = Buffer.from(audioData.buffer);
     } else {
       buffer = null;
