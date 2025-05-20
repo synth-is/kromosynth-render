@@ -1,9 +1,11 @@
 import { server as WebSocket } from 'websocket';
 import { createServer } from 'http';
-import { getAudioContext, getNewOfflineAudioContext } from './rendering-common.js';
+import { 
+  generateAudioDataFromGenomeString
+} from './rendering-common.js';
 import fetch from 'node-fetch';
-import { getAudioBufferFromGenomeAndMeta } from 'kromosynth';
 import { log } from 'console';
+import zlib from 'zlib'; // Add zlib for decompression
 
 // Create a plain HTTP server (not serving any additional files)
 const server = createServer();
@@ -60,34 +62,33 @@ async function generateAudioData( audioRenderRequest ) {
     velocity,
     reverse,
     useOvertoneInharmonicityFactors,
-    overrideGenomeDurationNoteDeltaAndVelocity
+    overrideGenomeDurationNoteDeltaAndVelocity,
+    useGPU,
+    antiAliasing,
+    frequencyUpdatesApplyToAllPathcNetworkOutputs,
+    sampleRate
   } = audioRenderRequest;
   // ... Generate or fetch the audio data ...
-  const genomeString = await downloadString(genomeStringUrl);
-  console.log('genomeStringUrl:', genomeStringUrl);
-  // console.log('genome string:', genomeString);
-  const genome = JSON.parse(genomeString);
+  let genomeString = await downloadString(genomeStringUrl);
 
-  let _duration, _noteDelta, _velocity;
-  if( overrideGenomeDurationNoteDeltaAndVelocity) {
-
-  } else {
-    _duration = duration;
-    _noteDelta = noteDelta;
-    _velocity = velocity;
+  // Check if the genomeStringUrl points to a .gz file and decompress if necessary
+  if (genomeStringUrl.endsWith('.gz')) {
+    genomeString = await decompressString(genomeString);
   }
-
-  // const audioContext = await getAudioContext();
-  const audioBuffer = await getAudioBufferFromGenomeAndMeta(
-    genome,
-    duration, noteDelta, velocity, reverse,
-    false, // asDataArray
-    getNewOfflineAudioContext( duration ),
-    getAudioContext(),
-    useOvertoneInharmonicityFactors
+  // console.log('genomeString:', genomeString);
+  return generateAudioDataFromGenomeString(
+    genomeString,
+    duration,
+    noteDelta,
+    velocity,
+    reverse,
+    useOvertoneInharmonicityFactors,
+    overrideGenomeDurationNoteDeltaAndVelocity,
+    useGPU,
+    antiAliasing,
+    frequencyUpdatesApplyToAllPathcNetworkOutputs,
+    sampleRate
   );
-  // console.log('audio buffer:', audioBuffer);
-  return audioBuffer;
 }
 
 function convertToPCM(audioBuffer) {
@@ -116,13 +117,27 @@ function convertToPCM(audioBuffer) {
 }
 
 async function downloadString(url) {
+  console.log('Downloading string from:', url);
   try {
     const response = await fetch(url);
     if (!response.ok) {
       throw new Error(`Request failed with status code ${response.status}`);
     }
-    return await response.text();
+    const arrayBuffer = await response.arrayBuffer(); // Use arrayBuffer() instead of buffer()
+    return Buffer.from(arrayBuffer); // Convert ArrayBuffer to Buffer
   } catch (error) {
     throw new Error(`Error downloading string: ${error.message}`);
   }
+}
+
+// Function to decompress a gzipped string
+async function decompressString(buffer) {
+  return new Promise((resolve, reject) => {
+    zlib.gunzip(buffer, (err, decompressedBuffer) => {
+      if (err) {
+        return reject(new Error(`Error decompressing string: ${err.message}`));
+      }
+      resolve(decompressedBuffer.toString());
+    });
+  });
 }

@@ -47,13 +47,29 @@ const verifyFirebaseToken = async (req, res, next) => {
   }
 };
 
-const BASE_PATH = '/Users/bjornpjo';
+const BASE_PATH = '/Users/bthj';
 const parentDirectoryPaths = [
-  '/QD-FOX/QD/evoruns/conf-duration_delta_pitch_combinations-singleCellWin',
-  '/QD-FOX/QD/evoruns/conf-single-class-runs',
-  '/QD-FOX/QD/evoruns/conf-single-class-runs_112-dur-pitch-vel-comb',
-  '/QD-FOX/QD/evoruns/conf-static_mutation_rate_combinations_-_delete_rates-singleCellWin',
-  '/QD-FOX/QD/evoruns/conf-static_mutation_rate_combinations-singleCellWin',
+  '/QD-Fox/evoruns/conf-duration_delta_pitch_combinations-singleCellWin',
+  '/QD-Fox/evoruns/conf-single-class-runs',
+  '/QD-Fox/evoruns/conf-single-class-runs_112-dur-pitch-vel-comb',
+  '/QD-Fox/evoruns/conf-static_mutation_rate_combinations_-_delete_rates-singleCellWin',
+  '/QD-Fox/evoruns/conf-static_mutation_rate_combinations-singleCellWin',
+
+  '/QD-ROBIN/evoruns/conf-duration_delta_pitch_combinations',
+  '/QD-ROBIN/evoruns/conf-duration_delta_pitch_combinations-deepGrid',
+  '/QD-ROBIN/evoruns/conf-static_mutation_rate_combinations',
+  '/QD-ROBIN/evoruns/conf-static_mutation_rate_combinations_-_delete_rates',
+  '/QD-ROBIN/evoruns/conf-static_mutation_rate_combinations_-_delete_rates-deepGrid',
+  '/QD-ROBIN/evoruns/conf-static_mutation_rate_combinations-deepGrid',
+
+  '/QD-SAGA/QD/evoruns/conf-duration_delta_pitch_combinations-deepGrid',
+  '/QD-SAGA/QD/evoruns/conf-single-class-runs',
+
+  // '/QD-FOX/evoruns/conf-duration_delta_pitch_combinations-singleCellWin',
+  // '/QD-FOX/evoruns/conf-single-class-runs',
+  // '/QD-FOX/evoruns/conf-single-class-runs_112-dur-pitch-vel-comb',
+  // '/QD-FOX/evoruns/conf-static_mutation_rate_combinations_-_delete_rates-singleCellWin',
+  // '/QD-FOX/evoruns/conf-static_mutation_rate_combinations-singleCellWin',
 ];
 
 // From a list of parent directory paths, read all subdirectory paths from disk and return them as a list
@@ -213,7 +229,7 @@ app.get('/genome-metadata', async (req, res) => {
     
     let tags, duration, noteDelta, velocity, updated;
     if( genomeAndMeta.genome.tags ) {
-    const tagForCell = genomeAndMeta.genome.tags.find(t => t.tag === className);
+      const tagForCell = genomeAndMeta.genome.tags.find(t => t.tag === className);
       ({ duration, noteDelta, velocity, updated } = tagForCell);
       tags = genomeAndMeta.genome.tags.map( t => t.tag );
     } else {
