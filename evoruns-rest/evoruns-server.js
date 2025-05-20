@@ -210,9 +210,17 @@ app.get('/genome-metadata', async (req, res) => {
     const score = eliteMap.cells[className].elts[0].s;
     const genomeString = await readGenomeAndMetaFromDisk( evoRunDirPath.split('/').pop(), genomeId, BASE_PATH+evoRunDirPath );
     const genomeAndMeta = JSON.parse(genomeString);
+    
+    let tags, duration, noteDelta, velocity, updated;
+    if( genomeAndMeta.genome.tags ) {
     const tagForCell = genomeAndMeta.genome.tags.find(t => t.tag === className);
-    const { duration, noteDelta, velocity, updated } = tagForCell;
-    const tags = genomeAndMeta.genome.tags.map( t => t.tag );
+      ({ duration, noteDelta, velocity, updated } = tagForCell);
+      tags = genomeAndMeta.genome.tags.map( t => t.tag );
+    } else {
+      duration = 1;
+      noteDelta = 0;
+      velocity = 1;
+    }
     let parentGenomeClass;
     if( genomeAndMeta.genome.parentGenomes && genomeAndMeta.genome.parentGenomes.length > 0 ) {
       parentGenomeClass = genomeAndMeta.genome.parentGenomes[0].eliteClass;
