@@ -71,11 +71,28 @@ async function generateAudioData( audioRenderRequest ) {
   // ... Generate or fetch the audio data ...
   let genomeString = await downloadString(genomeStringUrl);
 
+  console.log('Request parameters:', {
+    genomeStringUrl,
+    duration,
+    noteDelta,
+    velocity,
+    reverse,
+    useOvertoneInharmonicityFactors,
+    overrideGenomeDurationNoteDeltaAndVelocity,
+    useGPU,
+    antiAliasing,
+    frequencyUpdatesApplyToAllPathcNetworkOutputs,
+    sampleRate
+  });
+  console.log('genomeStringUrl:', genomeStringUrl);
   // Check if the genomeStringUrl points to a .gz file and decompress if necessary
   if (genomeStringUrl.endsWith('.gz')) {
     genomeString = await decompressString(genomeString);
+  } else if (Buffer.isBuffer(genomeString)) {
+    // If it's a buffer but not compressed, convert to string
+    genomeString = genomeString.toString('utf-8');
   }
-  // console.log('genomeString:', genomeString);
+  console.log('genomeString:', typeof genomeString === 'string' ? genomeString.substring(0, 200) + '...' : genomeString);
   return generateAudioDataFromGenomeString(
     genomeString,
     duration,
@@ -123,8 +140,16 @@ async function downloadString(url) {
     if (!response.ok) {
       throw new Error(`Request failed with status code ${response.status}`);
     }
-    const arrayBuffer = await response.arrayBuffer(); // Use arrayBuffer() instead of buffer()
-    return Buffer.from(arrayBuffer); // Convert ArrayBuffer to Buffer
+
+    // If the URL ends with .json.gz, treat as compressed file (buffer)
+    if (url.endsWith('.json.gz')) {
+      const arrayBuffer = await response.arrayBuffer();
+      return Buffer.from(arrayBuffer);
+    } else {
+      // For .json files or REST service endpoints, return as string
+      const text = await response.text();
+      return text;
+    }
   } catch (error) {
     throw new Error(`Error downloading string: ${error.message}`);
   }

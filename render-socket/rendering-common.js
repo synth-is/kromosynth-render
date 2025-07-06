@@ -47,6 +47,13 @@ export async function generateAudioDataFromGenomeString(
 	sampleOffset,
 ) {
   const genome = JSON.parse(genomeString);
+  console.log('Parsed genome structure:', {
+    hasGenome: !!genome.genome,
+    genomeKeys: Object.keys(genome),
+    genomeType: typeof genome.genome,
+    genomeGenomeKeys: genome.genome ? Object.keys(genome.genome) : 'N/A'
+  });
+  
   let _duration, _noteDelta, _velocity;
   if( overrideGenomeDurationNoteDeltaAndVelocity) {
 
@@ -56,14 +63,40 @@ export async function generateAudioDataFromGenomeString(
     _velocity = velocity;
   }
 
+	// Handle different genome structures:
+	// - Direct genome object
+	// - Wrapped in { genome: genomeData }
+	// - REST service format: { genome: { genome: genomeData } }
+	let actualGenome;
+	if (genome.genome && genome.genome.genome) {
+		// REST service format: response.genome.genome
+		actualGenome = genome.genome.genome;
+	} else if (genome.genome) {
+		// Wrapped format: { genome: genomeData }
+		actualGenome = genome.genome;
+	} else {
+		// Direct genome object
+		actualGenome = genome;
+	}
+
 	const genomeAndMeta = {
-		genome: genome.genome || genome, // TODO: oh this is a hack to handle different wrappings of genome
+		genome: actualGenome,
 		duration: _duration,
 		noteDelta: _noteDelta,
 		velocity: _velocity,
 		reverse,
 		useOvertoneInharmonicityFactors
 	};
+
+  console.log('genomeAndMeta structure:', {
+    hasGenome: !!genomeAndMeta.genome,
+    genomeType: typeof genomeAndMeta.genome,
+    genomeKeys: genomeAndMeta.genome ? Object.keys(genomeAndMeta.genome) : 'N/A',
+    actualGenomeStructure: genomeAndMeta.genome ? typeof genomeAndMeta.genome : 'N/A',
+    duration: _duration,
+    noteDelta: _noteDelta,
+    velocity: _velocity
+  });
 
   // const audioContext = await getAudioContext();
   const audioBuffer = await getAudioBufferFromGenomeAndMeta(
