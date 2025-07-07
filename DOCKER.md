@@ -34,7 +34,12 @@ This project includes Docker and Docker Compose configurations for easy deployme
 The project includes two Dockerfiles:
 
 - **`Dockerfile`** - Root-level Dockerfile for GitHub builds and external references
+  - Handles the local `kromosynth` dependency correctly
+  - Uses multi-stage build to compile native dependencies like `gl`
+  - Includes all necessary build tools
 - **`render-socket/Dockerfile.pcm`** - Local development Dockerfile with render-socket as build context
+
+**Important:** The GitHub Dockerfile handles the local file dependency `"kromosynth": "file:../../kromosynth"` by copying the entire repository first, then building from the render-socket directory.
 
 ### Environment Variables
 
