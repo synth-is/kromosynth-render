@@ -20,14 +20,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Copy package files from GitHub repository
-COPY render-socket/package*.json ./
+# Copy the entire repository (needed for local kromosynth dependency)
+COPY . .
 
-# Install dependencies (uses published kromosynth package from npm)
-RUN npm ci --omit=dev
+# Navigate to render-socket directory
+WORKDIR /app/render-socket
 
-# Copy application code
-COPY render-socket/ .
+# Install dependencies (this will resolve the local kromosynth dependency)
+RUN npm ci
 
 # Production stage
 FROM node:20-slim
@@ -53,7 +53,7 @@ COPY render-socket/asound.conf /etc/asound.conf
 WORKDIR /app
 
 # Copy built application from builder stage
-COPY --from=builder /app .
+COPY --from=builder /app/render-socket .
 
 # Expose the port
 EXPOSE 3000
