@@ -7,8 +7,16 @@ import fetch from 'node-fetch';
 import { log } from 'console';
 import zlib from 'zlib'; // Add zlib for decompression
 
-// Create a plain HTTP server (not serving any additional files)
-const server = createServer();
+// Create a plain HTTP server that can also handle health checks
+const server = createServer((req, res) => {
+  if (req.url === '/health' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok', timestamp: new Date().toISOString() }));
+  } else {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('Not Found');
+  }
+});
 
 const wsServer = new WebSocket({ httpServer: server });
 
@@ -48,8 +56,8 @@ wsServer.on('request', (request) => {
   });
 });
 
-const PORT = 3000;
-server.listen(PORT, () => {
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`WebSocket server listening on port ${PORT}`);
 });
 
