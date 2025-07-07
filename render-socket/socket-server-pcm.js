@@ -142,9 +142,13 @@ function convertToPCM(audioBuffer) {
 }
 
 async function downloadString(url) {
-  console.log('Downloading string from:', url);
+  // Replace localhost:3004 with the Docker service name if running in container
+  const evorunsServerUrl = process.env.EVORUNS_SERVER_URL || 'http://localhost:3004';
+  const processedUrl = url.replace(/http:\/\/localhost:3004/g, evorunsServerUrl);
+  
+  console.log('Downloading string from:', processedUrl);
   try {
-    const response = await fetch(url);
+    const response = await fetch(processedUrl);
     if (!response.ok) {
       throw new Error(`Request failed with status code ${response.status}`);
     }
