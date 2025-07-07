@@ -29,6 +29,13 @@ This project includes Docker and Docker Compose configurations for easy deployme
 
 ## Configuration
 
+### Dockerfiles
+
+The project includes two Dockerfiles:
+
+- **`Dockerfile`** - Root-level Dockerfile for GitHub builds and external references
+- **`render-socket/Dockerfile.pcm`** - Local development Dockerfile with render-socket as build context
+
 ### Environment Variables
 
 The following environment variables can be configured:
@@ -81,14 +88,16 @@ Example service addition:
 
 ### GitHub Integration
 
-The `docker-compose.yml` can reference this repository for automated builds:
+The `docker-compose.github.yml` can reference this repository for automated builds:
 
 ```yaml
   kromosynth-render:
     build:
       context: https://github.com/synth-is/kromosynth-render.git
-      dockerfile: render-socket/Dockerfile.pcm
+      dockerfile: Dockerfile
 ```
+
+**Note:** When building from GitHub, use the root-level `Dockerfile`, not `render-socket/Dockerfile.pcm`.
 
 ### Production Considerations
 

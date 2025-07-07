@@ -7,7 +7,7 @@ services:
   kromosynth-render:
     build:
       context: https://github.com/synth-is/kromosynth-render.git
-      dockerfile: render-socket/Dockerfile.pcm
+      dockerfile: Dockerfile
     ports:
       - "3000:3000"
     environment:
