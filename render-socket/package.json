@@ -5,7 +5,9 @@
   "main": "socket-server.js",
   "scripts": {
     "start": "node socket-server-pcm.js",
+    "start:cluster": "pm2-runtime start socket-server-pcm.js -i max",
     "dev": "node socket-server-pcm.js --port 3000",
+    "dev:cluster": "pm2-runtime start socket-server-pcm.js -i max -- --port 3000",
     "docker:build": "docker build -f Dockerfile.pcm -t kromosynth-render .",
     "docker:run": "docker run -p 3000:3000 kromosynth-render",
     "test": "echo \"Error: no test specified\" && exit 1"

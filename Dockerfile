@@ -32,7 +32,10 @@ RUN npm install
 # Production stage
 FROM node:20-slim
 
-# Install only runtime dependencies
+# Build arg to enable/disable PM2
+ARG USE_PM2=false
+
+# Install only runtime dependencies and optionally PM2
 RUN apt-get update && apt-get install -y --no-install-recommends \
         mesa-common-dev \
         libxi-dev \
@@ -45,7 +48,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libx11-dev \
         && \
     apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* && \
+    if [ "$USE_PM2" = "true" ] ; then npm install -g pm2 ; fi
 
 # Copy asound.conf for audio support
 COPY render-socket/asound.conf /etc/asound.conf
@@ -58,5 +62,8 @@ COPY --from=builder /app/render-socket .
 # Expose the port
 EXPOSE 3000
 
-# Command to run the PCM server
-CMD ["node", "socket-server-pcm.js"]
+# Add PM2 ecosystem configuration for clustering
+COPY --from=builder /app/ecosystem.config.js .
+
+# Command to run the PCM server with PM2 clustering
+CMD ["pm2-runtime", "start", "ecosystem.config.js"]
