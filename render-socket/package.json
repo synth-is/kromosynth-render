@@ -5,9 +5,7 @@
   "main": "socket-server.js",
   "scripts": {
     "start": "node socket-server-pcm.js",
-    "start:parallel": "node socket-server-pcm-parallel.js",
     "dev": "node socket-server-pcm.js --port 3000",
-    "dev:parallel": "node socket-server-pcm-parallel.js --port 3000",
     "docker:build": "docker build -f Dockerfile.pcm -t kromosynth-render .",
     "docker:run": "docker run -p 3000:3000 kromosynth-render",
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -27,11 +25,9 @@
     "minimist": "^1.2.8",
     "node-fetch": "^3.3.1",
     "node-web-audio-api": "^0.21.3",
+    "virtual-audio-graph": "github:synth-is/virtual-audio-graph",
     "websocket": "^1.0.34",
     "ws": "^8.14.1"
-  },
-  "overrides": {
-    "virtual-audio-graph": "git+https://github.com/synth-is/virtual-audio-graph.git"
   },
   "trustedDependencies": [
     "gl"
