@@ -47,12 +47,12 @@ export async function generateAudioDataFromGenomeString(
 	sampleOffset,
 ) {
   const genome = JSON.parse(genomeString);
-  console.log('Parsed genome structure:', {
-    hasGenome: !!genome.genome,
-    genomeKeys: Object.keys(genome),
-    genomeType: typeof genome.genome,
-    genomeGenomeKeys: genome.genome ? Object.keys(genome.genome) : 'N/A'
-  });
+  // console.log('Parsed genome structure:', {
+  //   hasGenome: !!genome.genome,
+  //   genomeKeys: Object.keys(genome),
+  //   genomeType: typeof genome.genome,
+  //   genomeGenomeKeys: genome.genome ? Object.keys(genome.genome) : 'N/A'
+  // });
   
   let _duration, _noteDelta, _velocity;
   if( overrideGenomeDurationNoteDeltaAndVelocity) {
@@ -88,15 +88,15 @@ export async function generateAudioDataFromGenomeString(
 		useOvertoneInharmonicityFactors
 	};
 
-  console.log('genomeAndMeta structure:', {
-    hasGenome: !!genomeAndMeta.genome,
-    genomeType: typeof genomeAndMeta.genome,
-    genomeKeys: genomeAndMeta.genome ? Object.keys(genomeAndMeta.genome) : 'N/A',
-    actualGenomeStructure: genomeAndMeta.genome ? typeof genomeAndMeta.genome : 'N/A',
-    duration: _duration,
-    noteDelta: _noteDelta,
-    velocity: _velocity
-  });
+  // console.log('genomeAndMeta structure:', {
+  //   hasGenome: !!genomeAndMeta.genome,
+  //   genomeType: typeof genomeAndMeta.genome,
+  //   genomeKeys: genomeAndMeta.genome ? Object.keys(genomeAndMeta.genome) : 'N/A',
+  //   actualGenomeStructure: genomeAndMeta.genome ? typeof genomeAndMeta.genome : 'N/A',
+  //   duration: _duration,
+  //   noteDelta: _noteDelta,
+  //   velocity: _velocity
+  // });
 
   // const audioContext = await getAudioContext();
   const audioBuffer = await getAudioBufferFromGenomeAndMeta(
