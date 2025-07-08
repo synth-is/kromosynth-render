@@ -59,11 +59,11 @@ WORKDIR /app
 # Copy built application from builder stage
 COPY --from=builder /app/render-socket .
 
+# Copy the correct PM2 ecosystem config from the render-socket directory
+COPY --from=builder /app/render-socket/ecosystem.config.js .
+
 # Expose the port
 EXPOSE 3000
-
-# Copy the ecosystem.config.js file (already has the correct configuration)
-COPY --from=builder /app/ecosystem.config.js .
 
 # Command to run the PCM server with PM2 clustering
 CMD ["pm2-runtime", "start", "ecosystem.config.js"]
