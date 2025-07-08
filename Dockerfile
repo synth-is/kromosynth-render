@@ -59,8 +59,8 @@ WORKDIR /app
 # Copy built application from builder stage
 COPY --from=builder /app/render-socket .
 
-# Copy the correct PM2 ecosystem config from the render-socket directory
-COPY --from=builder /app/render-socket/ecosystem.config.js .
+# Copy the correct PM2 ecosystem config from the repo root
+COPY --from=builder /app/ecosystem.config.js .
 
 # Expose the port
 EXPOSE 3000
