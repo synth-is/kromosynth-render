@@ -62,8 +62,8 @@ COPY --from=builder /app/render-socket .
 # Expose the port
 EXPOSE 3000
 
-# Create PM2 ecosystem configuration
-RUN printf 'module.exports = {\n  apps: [{\n    name: "kromosynth-render",\n    script: "socket-server-pcm.js",\n    instances: process.env.PM2_INSTANCES || "max",\n    exec_mode: "cluster",\n    autorestart: true,\n    watch: false,\n    max_memory_restart: "1G",\n    env: {\n      NODE_ENV: process.env.NODE_ENV || "production",\n      PORT: process.env.PORT || 3000,\n      EVORUNS_SERVER_URL: process.env.EVORUNS_SERVER_URL || "http://kromosynth-evoruns:3004"\n    }\n  }]\n}\n' > ecosystem.config.js
+# Copy the ecosystem.config.js file (already has the correct configuration)
+COPY --from=builder /app/ecosystem.config.js .
 
 # Command to run the PCM server with PM2 clustering
 CMD ["pm2-runtime", "start", "ecosystem.config.js"]
