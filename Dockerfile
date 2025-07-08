@@ -27,7 +27,7 @@ COPY . .
 WORKDIR /app/render-socket
 
 # Install dependencies (this will resolve the local kromosynth dependency)
-RUN npm ci
+RUN npm install
 
 # Production stage
 FROM node:20-slim
