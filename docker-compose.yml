@@ -9,6 +9,7 @@ services:
       - "3000:3000"
     environment:
       - PORT=3000
+      - EVORUNS_SERVER_URL=http://evorun-browser-server:3004
     restart: unless-stopped
     networks:
       - kromosynth-network

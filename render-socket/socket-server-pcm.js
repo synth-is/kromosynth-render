@@ -142,9 +142,13 @@ function convertToPCM(audioBuffer) {
 }
 
 async function downloadString(url) {
-  // Replace localhost:3004 with the Docker service name if running in container
-  const evorunsServerUrl = process.env.EVORUNS_SERVER_URL || 'http://localhost:3004';
-  const processedUrl = url.replace(/http:\/\/localhost:3004/g, evorunsServerUrl);
+  // Replace localhost/127.0.0.1:3004 with the appropriate server URL
+  // In Docker: use service name (e.g., 'http://evorun-browser-server:3004')
+  // On bare metal: use 127.0.0.1 to avoid IPv6 issues
+  const evorunsServerUrl = process.env.EVORUNS_SERVER_URL || 'http://127.0.0.1:3004';
+  
+  // Replace both localhost and 127.0.0.1 patterns to ensure consistency
+  const processedUrl = url.replace(/http:\/\/(localhost|127\.0\.0\.1):3004/g, evorunsServerUrl);
   
   console.log('Downloading string from:', processedUrl);
   try {
