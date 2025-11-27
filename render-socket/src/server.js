@@ -33,6 +33,12 @@ console.log(`Sample Rate: ${SAMPLE_RATE}`);
 console.log('='.repeat(50));
 console.log();
 
+// Server optimization: Warm audio context for CPPN GPU computation (reused across requests)
+console.log('⚡ Initializing warm audio context (for CPPN GPU reuse)...');
+const sharedAudioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
+console.log('✓ Warm context ready');
+console.log();
+
 // WebSocket server
 const wss = new WebSocketServer({ port: PORT });
 
@@ -63,8 +69,8 @@ async function handleRenderRequest(ws, request) {
     // Import StreamingRenderer
     const { StreamingRenderer } = await import(`${KROMOSYNTH_PATH}/util/streaming-renderer.js`);
 
-    // Create audio contexts
-    const audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
+    // Create offline context (one per render)
+    // Reuse shared AudioContext (warm, with AudioWorklet pre-loaded)
     const offlineContext = new OfflineAudioContext({
       numberOfChannels: 1,
       length: Math.round(SAMPLE_RATE * duration),
@@ -79,8 +85,8 @@ async function handleRenderRequest(ws, request) {
       reverse: false
     };
 
-    // Create renderer
-    const renderer = new StreamingRenderer(audioContext, SAMPLE_RATE, {
+    // Create renderer using warm shared context
+    const renderer = new StreamingRenderer(sharedAudioContext, SAMPLE_RATE, {
       useGPU,
       measureRTF: false,
       defaultChunkDuration: 0.25,
@@ -126,7 +132,7 @@ async function handleRenderRequest(ws, request) {
     console.log(`✅ Render complete: ${chunkIndex} chunks, ${duration}s`);
     console.log();
 
-    // Send completion message BEFORE closing contexts
+    // Send completion message BEFORE cleanup
     ws.send(JSON.stringify({
       type: 'complete',
       totalChunks: chunkIndex,
@@ -135,17 +141,8 @@ async function handleRenderRequest(ws, request) {
       sampleRate: SAMPLE_RATE
     }));
 
-    // Clean up contexts (with small delay to let AudioWorklet finish)
-    // Wrap in try-catch to prevent cleanup errors from crashing the server
-    setTimeout(async () => {
-      try {
-        await audioContext.close();
-        console.log('  ✓ Audio contexts closed');
-      } catch (error) {
-        // Ignore cleanup errors (AudioWorklet may already be closed)
-        console.log('  ℹ️  Context cleanup completed (with warnings)');
-      }
-    }, 100);
+    // Note: sharedAudioContext is reused, only offlineContext needs cleanup
+    // The offlineContext is automatically cleaned up by garbage collection
 
   } catch (error) {
     console.error(`❌ Render error:`, error);
