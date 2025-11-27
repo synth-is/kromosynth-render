@@ -88,6 +88,13 @@
       <label>seconds</label>
     </div>
     <div>
+      <label>Note Delta:</label>
+      <input type="number" id="noteDelta" value="0" min="-24" max="24" step="1" style="width: 80px">
+      <label>semitones</label>
+      <label style="margin-left: 20px">Velocity:</label>
+      <input type="number" id="velocity" value="0.5" min="0" max="1" step="0.1" style="width: 80px">
+    </div>
+    <div>
       <button id="connectBtn" onclick="connect()">Connect</button>
       <button id="renderBtn" onclick="startRender()" disabled>Render</button>
       <button id="disconnectBtn" onclick="disconnect()" disabled>Disconnect</button>
@@ -173,8 +180,11 @@
     function startRender() {
       const genomeId = document.getElementById('genomeId').value;
       const duration = parseFloat(document.getElementById('duration').value);
+      const noteDelta = parseFloat(document.getElementById('noteDelta').value);
+      const velocity = parseFloat(document.getElementById('velocity').value);
 
-      log(`📤 Requesting render: ${genomeId} (${duration}s)`);
+      const noteStr = noteDelta > 0 ? `+${noteDelta}` : noteDelta;
+      log(`📤 Requesting render: ${genomeId} (${duration}s, note=${noteStr}, vel=${velocity.toFixed(1)})`);
 
       // Reset state
       totalChunks = 0;
@@ -190,8 +200,8 @@
         type: 'render',
         genomeId,
         duration,
-        noteDelta: 0,
-        velocity: 0.5,
+        noteDelta,
+        velocity,
         useGPU: true
       }));
 
