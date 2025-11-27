@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kromosynth Render Client</title>
+  <style>
+    body {
+      font-family: 'Monaco', 'Courier New', monospace;
+      max-width: 800px;
+      margin: 50px auto;
+      padding: 20px;
+      background: #1a1a1a;
+      color: #00ff00;
+    }
+    h1 {
+      border-bottom: 2px solid #00ff00;
+      padding-bottom: 10px;
+    }
+    .controls {
+      background: #2a2a2a;
+      padding: 20px;
+      margin: 20px 0;
+      border: 1px solid #00ff00;
+    }
+    input, button {
+      background: #1a1a1a;
+      border: 1px solid #00ff00;
+      color: #00ff00;
+      padding: 10px;
+      margin: 5px;
+      font-family: inherit;
+    }
+    button {
+      cursor: pointer;
+    }
+    button:hover {
+      background: #00ff00;
+      color: #1a1a1a;
+    }
+    #log {
+      background: #0a0a0a;
+      border: 1px solid #00ff00;
+      padding: 15px;
+      height: 400px;
+      overflow-y: scroll;
+      font-size: 12px;
+    }
+    .log-entry {
+      margin: 5px 0;
+    }
+    .log-error {
+      color: #ff0000;
+    }
+    .log-success {
+      color: #00ffff;
+    }
+    #progress {
+      width: 100%;
+      height: 30px;
+      background: #2a2a2a;
+      border: 1px solid #00ff00;
+      margin: 10px 0;
+    }
+    #progress-bar {
+      height: 100%;
+      background: #00ff00;
+      width: 0%;
+      transition: width 0.1s;
+    }
+  </style>
+</head>
+<body>
+  <h1>🎵 Kromosynth Render Client</h1>
+  
+  <div class="controls">
+    <div>
+      <label>Server URL:</label>
+      <input type="text" id="serverUrl" value="ws://localhost:8080" style="width: 300px">
+    </div>
+    <div>
+      <label>Genome ID:</label>
+      <input type="text" id="genomeId" value="01JF2N9RZ07V06EJ4DJ9ZGCM2D" style="width: 300px">
+    </div>
+    <div>
+      <label>Duration:</label>
+      <input type="number" id="duration" value="5" min="1" max="60" style="width: 100px">
+      <label>seconds</label>
+    </div>
+    <div>
+      <button id="connectBtn" onclick="connect()">Connect</button>
+      <button id="renderBtn" onclick="startRender()" disabled>Render</button>
+      <button id="disconnectBtn" onclick="disconnect()" disabled>Disconnect</button>
+    </div>
+  </div>
+
+  <div id="progress">
+    <div id="progress-bar"></div>
+  </div>
+
+  <div id="log"></div>
+
+  <script>
+    let ws = null;
+    let audioContext = null;
+    let nextPlayTime = null;
+    let isPlaying = false;
+    let totalChunks = 0;
+    let startTime = null;
+
+    // Batching for performance
+    let pendingBatch = [];
+    let pendingBatchSamples = 0;
+    const BATCH_SIZE_SAMPLES = 4800; // ~0.1s at 48kHz (reduces node count)
+
+    function log(message, type = 'info') {
+      const logDiv = document.getElementById('log');
+      const entry = document.createElement('div');
+      entry.className = `log-entry log-${type}`;
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+      logDiv.appendChild(entry);
+      logDiv.scrollTop = logDiv.scrollHeight;
+    }
+
+    function updateProgress(current, total) {
+      const percent = (current / total) * 100;
+      document.getElementById('progress-bar').style.width = `${percent}%`;
+    }
+
+    function connect() {
+      const serverUrl = document.getElementById('serverUrl').value;
+      log(`Connecting to ${serverUrl}...`);
+
+      ws = new WebSocket(serverUrl);
+
+      ws.onopen = () => {
+        log('✓ Connected to server', 'success');
+        document.getElementById('connectBtn').disabled = true;
+        document.getElementById('renderBtn').disabled = false;
+        document.getElementById('disconnectBtn').disabled = false;
+
+        // Initialize Web Audio API
+        if (!audioContext) {
+          audioContext = new (window.AudioContext || window.webkitAudioContext)();
+          log(`Audio context created (${audioContext.sampleRate}Hz)`);
+        }
+      };
+
+      ws.onmessage = (event) => {
+        const message = JSON.parse(event.data);
+        handleMessage(message);
+      };
+
+      ws.onerror = (error) => {
+        log(`WebSocket error: ${error}`, 'error');
+      };
+
+      ws.onclose = () => {
+        log('Disconnected from server');
+        document.getElementById('connectBtn').disabled = false;
+        document.getElementById('renderBtn').disabled = true;
+        document.getElementById('disconnectBtn').disabled = true;
+      };
+    }
+
+    function disconnect() {
+      if (ws) {
+        ws.close();
+        ws = null;
+      }
+    }
+
+    function startRender() {
+      const genomeId = document.getElementById('genomeId').value;
+      const duration = parseFloat(document.getElementById('duration').value);
+
+      log(`📤 Requesting render: ${genomeId} (${duration}s)`);
+
+      // Reset state
+      totalChunks = 0;
+      startTime = Date.now();
+      nextPlayTime = audioContext.currentTime + 0.5; // 500ms buffer
+      isPlaying = false;
+      pendingBatch = [];
+      pendingBatchSamples = 0;
+      updateProgress(0, 1);
+
+      // Send render request
+      ws.send(JSON.stringify({
+        type: 'render',
+        genomeId,
+        duration,
+        noteDelta: 0,
+        velocity: 0.5,
+        useGPU: true
+      }));
+
+      document.getElementById('renderBtn').disabled = true;
+    }
+
+    function handleMessage(message) {
+      switch (message.type) {
+        case 'welcome':
+          log(`💬 ${message.message}`);
+          break;
+
+        case 'chunk':
+          totalChunks++;
+          const audioData = new Float32Array(message.data);
+
+          if (!isPlaying) {
+            isPlaying = true;
+            const elapsed = Date.now() - startTime;
+            log(`⚡ FIRST AUDIO in ${elapsed}ms!`, 'success');
+          }
+
+          // Add to batch
+          pendingBatch.push(audioData);
+          pendingBatchSamples += audioData.length;
+
+          // Schedule batch when it reaches target size
+          if (pendingBatchSamples >= BATCH_SIZE_SAMPLES) {
+            scheduleBatch(message.sampleRate);
+          }
+
+          // Update progress
+          const duration = parseFloat(document.getElementById('duration').value);
+          updateProgress(message.timestamp, duration);
+
+          // Log progress (throttled)
+          if (totalChunks % 100 === 0) {
+            const elapsed = (Date.now() - startTime) / 1000;
+            log(`📥 Chunk ${totalChunks}: ${message.timestamp.toFixed(2)}s / ${duration}s (${elapsed.toFixed(2)}s elapsed)`);
+          }
+          break;
+
+        case 'complete':
+          // Flush any remaining batched chunks
+          if (pendingBatch.length > 0) {
+            scheduleBatch(message.sampleRate);
+          }
+
+          const totalTime = (Date.now() - startTime) / 1000;
+          log(`✅ Render complete!`, 'success');
+          log(`   Total chunks: ${message.totalChunks}`);
+          log(`   Duration: ${message.duration}s`);
+          log(`   Time: ${totalTime.toFixed(2)}s`);
+          updateProgress(1, 1);
+          document.getElementById('renderBtn').disabled = false;
+          break;
+
+        case 'error':
+          log(`❌ Error: ${message.message}`, 'error');
+          document.getElementById('renderBtn').disabled = false;
+          break;
+
+        default:
+          console.log('Unknown message:', message);
+      }
+    }
+
+    function scheduleBatch(sampleRate) {
+      if (pendingBatch.length === 0) return;
+
+      // Combine pending chunks into single Float32Array
+      const combinedData = new Float32Array(pendingBatchSamples);
+      let offset = 0;
+      for (const chunk of pendingBatch) {
+        combinedData.set(chunk, offset);
+        offset += chunk.length;
+      }
+
+      // Create audio buffer for combined batch
+      const buffer = audioContext.createBuffer(1, combinedData.length, sampleRate);
+      buffer.copyToChannel(combinedData, 0);
+
+      // Create source node
+      const source = audioContext.createBufferSource();
+      source.buffer = buffer;
+      source.connect(audioContext.destination);
+
+      // Schedule playback
+      source.start(nextPlayTime);
+
+      // Update next play time
+      const batchDuration = combinedData.length / sampleRate;
+      nextPlayTime += batchDuration;
+
+      // Reset batch
+      pendingBatch = [];
+      pendingBatchSamples = 0;
+    }
+  </script>
+</body>
+</html>
