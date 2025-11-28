@@ -85,19 +85,44 @@ async function handleRenderRequest(ws, request) {
       reverse: false
     };
 
-    // Create renderer using warm shared context
+    // State for client-controlled rendering
+    const renderState = {
+      clientPosition: 0,        // Last reported playback position from client
+      renderedDuration: 0,      // How much we've rendered so far
+      totalDuration: duration,
+      bufferAhead: 2.0          // How far ahead to stay (matches renderer default)
+    };
+
+    // Create renderer with controlled resume enabled
     const renderer = new StreamingRenderer(sharedAudioContext, SAMPLE_RATE, {
       useGPU,
       measureRTF: false,
       defaultChunkDuration: 0.25,
-      enableAdaptiveChunking: true
+      enableAdaptiveChunking: true,
+      controlledResume: true,
+      initialBufferDuration: 2.0,
+      bufferAhead: 2.0
     });
 
     let chunkIndex = 0;
     let totalSamples = 0;
 
+    // Listen for playback position updates from client
+    const positionHandler = (data) => {
+      try {
+        const message = JSON.parse(data);
+        if (message.type === 'playback-position') {
+          renderState.clientPosition = message.position;
+          // console.log(`  📍 Client position: ${message.position.toFixed(2)}s`);
+        }
+      } catch (e) {
+        // Ignore parse errors
+      }
+    };
+    ws.on('message', positionHandler);
+
     // Start rendering with chunk callback
-    console.log(`🎬 Starting render for ${genomeId}...`);
+    console.log(`🎬 Starting adaptive render for ${genomeId}...`);
 
     const renderPromise = renderer.render(
       genomeAndMeta,
@@ -108,6 +133,7 @@ async function handleRenderRequest(ws, request) {
           chunkIndex++;
           totalSamples += chunkData.length;
           const timestamp = totalSamples / SAMPLE_RATE;
+          renderState.renderedDuration = timestamp;
 
           // Send chunk to client
           ws.send(JSON.stringify({
@@ -120,14 +146,29 @@ async function handleRenderRequest(ws, request) {
 
           // Log progress (throttled)
           if (chunkIndex % 10 === 0 || timestamp >= duration) {
-            console.log(`  📤 Sent chunk ${chunkIndex} (${timestamp.toFixed(2)}s / ${duration}s)`);
+            console.log(`  📤 Sent chunk ${chunkIndex} (${timestamp.toFixed(2)}s / ${duration}s, client @ ${renderState.clientPosition.toFixed(2)}s)`);
           }
+        },
+
+        // Controlled resume: only resume if we need to stay ahead of client
+        shouldResume: (renderedDuration) => {
+          const bufferRemaining = renderedDuration - renderState.clientPosition;
+          const needMore = bufferRemaining < renderState.bufferAhead;
+          return needMore;
+        },
+
+        // Notify when initial buffer is complete
+        onBufferFull: (renderedDuration) => {
+          console.log(`  ⏸️  Initial buffer complete (${renderedDuration.toFixed(2)}s), waiting for client playback...`);
         }
       }
     );
 
     // Wait for render to complete
     await renderPromise;
+
+    // Clean up position handler
+    ws.off('message', positionHandler);
 
     console.log(`✅ Render complete: ${chunkIndex} chunks, ${duration}s`);
     console.log();
@@ -160,9 +201,11 @@ wss.on('connection', (ws, req) => {
   ws.on('message', async (data) => {
     try {
       const message = JSON.parse(data);
-      
+
       if (message.type === 'render') {
         await handleRenderRequest(ws, message);
+      } else if (message.type === 'playback-position') {
+        // Handled by position handler in handleRenderRequest - ignore here
       } else {
         ws.send(JSON.stringify({
           type: 'error',

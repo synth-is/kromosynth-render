@@ -115,6 +115,10 @@
     let totalChunks = 0;
     let startTime = null;
 
+    // Playback position tracking for adaptive streaming
+    let playbackStartTime = null;  // When audio playback actually started
+    let positionReportInterval = null;
+
     // Batching for performance
     let pendingBatch = [];
     let pendingBatchSamples = 0;
@@ -132,6 +136,37 @@
     function updateProgress(current, total) {
       const percent = (current / total) * 100;
       document.getElementById('progress-bar').style.width = `${percent}%`;
+    }
+
+    function sendPlaybackPosition() {
+      if (!ws || !playbackStartTime) return;
+
+      // Calculate current playback position
+      const currentPlaybackTime = audioContext.currentTime;
+      const position = Math.max(0, currentPlaybackTime - playbackStartTime);
+
+      // Send to server
+      ws.send(JSON.stringify({
+        type: 'playback-position',
+        position: position
+      }));
+    }
+
+    function startPositionReporting() {
+      // Stop any existing interval
+      if (positionReportInterval) {
+        clearInterval(positionReportInterval);
+      }
+
+      // Send position updates every 500ms
+      positionReportInterval = setInterval(sendPlaybackPosition, 500);
+    }
+
+    function stopPositionReporting() {
+      if (positionReportInterval) {
+        clearInterval(positionReportInterval);
+        positionReportInterval = null;
+      }
     }
 
     function connect() {
@@ -193,6 +228,8 @@
       isPlaying = false;
       pendingBatch = [];
       pendingBatchSamples = 0;
+      playbackStartTime = null;
+      stopPositionReporting();
       updateProgress(0, 1);
 
       // Send render request
@@ -250,6 +287,9 @@
             scheduleBatch(message.sampleRate);
           }
 
+          // Stop position reporting
+          stopPositionReporting();
+
           const totalTime = (Date.now() - startTime) / 1000;
           log(`✅ Render complete!`, 'success');
           log(`   Total chunks: ${message.totalChunks}`);
@@ -288,6 +328,14 @@
       const source = audioContext.createBufferSource();
       source.buffer = buffer;
       source.connect(audioContext.destination);
+
+      // Track playback start time for first batch
+      if (playbackStartTime === null) {
+        playbackStartTime = nextPlayTime;
+        // Start reporting position to server
+        startPositionReporting();
+        log(`🎯 Started position reporting (playback starts at ${playbackStartTime.toFixed(2)}s)`);
+      }
 
       // Schedule playback
       source.start(nextPlayTime);
