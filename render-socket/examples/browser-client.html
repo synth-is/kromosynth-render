@@ -309,7 +309,7 @@
       }
     }
 
-    function scheduleBatch(sampleRate) {
+    function scheduleBatch(serverSampleRate) {
       if (pendingBatch.length === 0) return;
 
       // Combine pending chunks into single Float32Array
@@ -320,9 +320,49 @@
         offset += chunk.length;
       }
 
-      // Create audio buffer for combined batch
-      const buffer = audioContext.createBuffer(1, combinedData.length, sampleRate);
-      buffer.copyToChannel(combinedData, 0);
+      // Apply fade-in to first batch to avoid click
+      const isFirstBatch = playbackStartTime === null;
+      if (isFirstBatch) {
+        // Apply 10ms fade-in to avoid click at start
+        const fadeInDuration = 0.010; // 10ms
+        const fadeInSamples = Math.min(Math.floor(fadeInDuration * serverSampleRate), combinedData.length);
+        for (let i = 0; i < fadeInSamples; i++) {
+          const gain = i / fadeInSamples; // Linear fade-in
+          combinedData[i] *= gain;
+        }
+      }
+
+      // IMPORTANT: Create buffer with audioContext's sample rate, not server's!
+      // This ensures correct playback speed and timing
+      const contextSampleRate = audioContext.sampleRate;
+
+      // Calculate actual number of samples needed at context sample rate
+      // to maintain the same duration
+      const serverDuration = combinedData.length / serverSampleRate;
+      const contextSamples = Math.floor(serverDuration * contextSampleRate);
+
+      // Create buffer at context sample rate
+      const buffer = audioContext.createBuffer(1, contextSamples, contextSampleRate);
+
+      // Resample data if needed
+      if (serverSampleRate === contextSampleRate) {
+        // No resampling needed - direct copy
+        buffer.copyToChannel(combinedData, 0);
+      } else {
+        // Simple linear interpolation resampling
+        const channelData = buffer.getChannelData(0);
+        const ratio = combinedData.length / contextSamples;
+        for (let i = 0; i < contextSamples; i++) {
+          const srcIndex = i * ratio;
+          const srcIndexFloor = Math.floor(srcIndex);
+          const srcIndexCeil = Math.min(srcIndexFloor + 1, combinedData.length - 1);
+          const frac = srcIndex - srcIndexFloor;
+
+          // Linear interpolation
+          channelData[i] = combinedData[srcIndexFloor] * (1 - frac) +
+                          combinedData[srcIndexCeil] * frac;
+        }
+      }
 
       // Create source node
       const source = audioContext.createBufferSource();
@@ -330,18 +370,20 @@
       source.connect(audioContext.destination);
 
       // Track playback start time for first batch
-      if (playbackStartTime === null) {
+      if (isFirstBatch) {
         playbackStartTime = nextPlayTime;
         // Start reporting position to server
         startPositionReporting();
         log(`🎯 Started position reporting (playback starts at ${playbackStartTime.toFixed(2)}s)`);
+        log(`   Sample rate: server=${serverSampleRate}Hz, context=${contextSampleRate}Hz${serverSampleRate !== contextSampleRate ? ' (resampling)' : ''}`);
       }
 
       // Schedule playback
       source.start(nextPlayTime);
 
-      // Update next play time
-      const batchDuration = combinedData.length / sampleRate;
+      // Update next play time using ACTUAL playback duration
+      // (based on context sample rate, not server sample rate)
+      const batchDuration = buffer.length / contextSampleRate;
       nextPlayTime += batchDuration;
 
       // Reset batch
