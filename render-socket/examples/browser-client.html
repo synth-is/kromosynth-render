@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -13,17 +14,21 @@
       background: #1a1a1a;
       color: #00ff00;
     }
+
     h1 {
       border-bottom: 2px solid #00ff00;
       padding-bottom: 10px;
     }
+
     .controls {
       background: #2a2a2a;
       padding: 20px;
       margin: 20px 0;
       border: 1px solid #00ff00;
     }
-    input, button {
+
+    input,
+    button {
       background: #1a1a1a;
       border: 1px solid #00ff00;
       color: #00ff00;
@@ -31,13 +36,16 @@
       margin: 5px;
       font-family: inherit;
     }
+
     button {
       cursor: pointer;
     }
+
     button:hover {
       background: #00ff00;
       color: #1a1a1a;
     }
+
     #log {
       background: #0a0a0a;
       border: 1px solid #00ff00;
@@ -46,15 +54,19 @@
       overflow-y: scroll;
       font-size: 12px;
     }
+
     .log-entry {
       margin: 5px 0;
     }
+
     .log-error {
       color: #ff0000;
     }
+
     .log-success {
       color: #00ffff;
     }
+
     #progress {
       width: 100%;
       height: 30px;
@@ -62,6 +74,7 @@
       border: 1px solid #00ff00;
       margin: 10px 0;
     }
+
     #progress-bar {
       height: 100%;
       background: #00ff00;
@@ -70,13 +83,14 @@
     }
   </style>
 </head>
+
 <body>
   <h1>🎵 Kromosynth Render Client</h1>
-  
+
   <div class="controls">
     <div>
       <label>Server URL:</label>
-      <input type="text" id="serverUrl" value="ws://localhost:8080" style="width: 300px">
+      <input type="text" id="serverUrl" value="ws://localhost:3000" style="width: 300px">
     </div>
     <div>
       <label>Genome ID:</label>
@@ -360,7 +374,7 @@
 
           // Linear interpolation
           channelData[i] = combinedData[srcIndexFloor] * (1 - frac) +
-                          combinedData[srcIndexCeil] * frac;
+            combinedData[srcIndexCeil] * frac;
         }
       }
 
@@ -392,4 +406,5 @@
     }
   </script>
 </body>
+
 </html>

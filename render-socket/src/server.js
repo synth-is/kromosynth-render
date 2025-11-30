@@ -17,7 +17,7 @@ const { OfflineAudioContext, AudioContext } = NodeWebAudioAPI;
 const gunzip = promisify(zlib.gunzip);
 
 // Configuration
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 3000;
 const SAMPLE_RATE = 48000;
 const DB_PATH = process.env.DB_PATH || '/Users/bjornpjo/QD/evoruns/01JF0WEW4BTQSWWKGFR72JQ7J6_evoConf_singleMap_refSingleEmb_mfcc-sans0-statistics_AE_retrainIncr50_zScoreNSynthTrain_noveltySel/genomes.sqlite';
 
@@ -45,10 +45,22 @@ const wss = new WebSocketServer({ port: PORT });
 console.log(`✓ WebSocket server listening on port ${PORT}`);
 console.log();
 
-async function loadGenome(genomeId, dbPath) {
-  const db = new Database(dbPath, { readonly: true });
+// Load genome from database or use provided genome data
+async function loadGenome(genomeIdOrData) {
+  // If it's an object, it's already genome data - just return it
+  if (typeof genomeIdOrData === 'object' && genomeIdOrData !== null) {
+    console.log('Using provided genome data');
+    return genomeIdOrData;
+  }
+
+  // Otherwise, load from database by ID
+  const genomeId = genomeIdOrData;
+  const db = new Database(DB_PATH, { readonly: true });
   const row = db.prepare('SELECT data FROM genomes WHERE id = ?').get(genomeId);
-  if (!row) throw new Error(`Genome ${genomeId} not found`);
+  if (!row) {
+    db.close();
+    throw new Error(`Genome ${genomeId} not found`);
+  }
 
   const jsonData = await gunzip(row.data);
   const genomeData = JSON.parse(jsonData);
@@ -57,14 +69,32 @@ async function loadGenome(genomeId, dbPath) {
   return genomeData.genome || genomeData;
 }
 
-async function handleRenderRequest(ws, request) {
-  const { genomeId, duration, noteDelta = 0, velocity = 0.5, useGPU = true } = request;
+// Handle render request
+async function handleRenderRequest(ws, message) {
+  const { genomeId, genome, duration, noteDelta = 0, velocity = 1.0, useGPU = false } = message;
 
-  console.log(`📥 Render request: ${genomeId} (${duration}s, note=${noteDelta}, vel=${velocity})`);
+  console.log(`📥 Render request: ${genomeId || 'inline genome'} (${duration}s, note=${noteDelta}, vel=${velocity})`);
 
   try {
-    // Load genome
-    const genome = await loadGenome(genomeId, DB_PATH);
+    // Use provided genome data if available, otherwise load from database
+    const genomeData = genome || await loadGenome(genomeId);
+
+    // Ensure asNEATPatch is an object (parse recursively if string)
+    // Handle cases where it might be double-encoded
+    while (genomeData.asNEATPatch && typeof genomeData.asNEATPatch === 'string') {
+      try {
+        const parsed = JSON.parse(genomeData.asNEATPatch);
+        genomeData.asNEATPatch = parsed;
+      } catch (e) {
+        console.warn(`Failed to parse asNEATPatch string for ${genomeId}:`, e);
+        break;
+      }
+    }
+
+    // Ensure asNEATPatch has toJSON method (required by StreamingRenderer)
+    if (genomeData.asNEATPatch && !genomeData.asNEATPatch.toJSON) {
+      genomeData.asNEATPatch.toJSON = function () { return this; };
+    }
 
     // Import StreamingRenderer
     const { StreamingRenderer } = await import(`${KROMOSYNTH_PATH}/util/streaming-renderer.js`);
@@ -78,7 +108,7 @@ async function handleRenderRequest(ws, request) {
     });
 
     const genomeAndMeta = {
-      genome,
+      genome: genomeData,
       duration,
       noteDelta,
       velocity,
