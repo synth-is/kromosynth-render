@@ -36,7 +36,8 @@ console.log();
 // Server optimization: Warm audio context for CPPN GPU computation (reused across requests)
 console.log('⚡ Initializing warm audio context (for CPPN GPU reuse)...');
 const sharedAudioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
-console.log('✓ Warm context ready');
+const ACTUAL_SAMPLE_RATE = sharedAudioContext.sampleRate;
+console.log(`✓ Warm context ready (Sample Rate: ${ACTUAL_SAMPLE_RATE}Hz)`);
 console.log();
 
 // WebSocket server
@@ -103,8 +104,8 @@ async function handleRenderRequest(ws, message) {
     // Reuse shared AudioContext (warm, with AudioWorklet pre-loaded)
     const offlineContext = new OfflineAudioContext({
       numberOfChannels: 1,
-      length: Math.round(SAMPLE_RATE * duration),
-      sampleRate: SAMPLE_RATE
+      length: Math.round(ACTUAL_SAMPLE_RATE * duration),
+      sampleRate: ACTUAL_SAMPLE_RATE
     });
 
     const genomeAndMeta = {
@@ -124,7 +125,7 @@ async function handleRenderRequest(ws, message) {
     };
 
     // Create renderer with controlled resume enabled
-    const renderer = new StreamingRenderer(sharedAudioContext, SAMPLE_RATE, {
+    const renderer = new StreamingRenderer(sharedAudioContext, ACTUAL_SAMPLE_RATE, {
       useGPU,
       measureRTF: false,
       defaultChunkDuration: 0.25,
@@ -162,7 +163,7 @@ async function handleRenderRequest(ws, message) {
         onChunk: (chunkData) => {
           chunkIndex++;
           totalSamples += chunkData.length;
-          const timestamp = totalSamples / SAMPLE_RATE;
+          const timestamp = totalSamples / ACTUAL_SAMPLE_RATE;
           renderState.renderedDuration = timestamp;
 
           // Send chunk to client
@@ -171,7 +172,7 @@ async function handleRenderRequest(ws, message) {
             index: chunkIndex,
             data: Array.from(chunkData), // Convert Float32Array to regular array for JSON
             timestamp,
-            sampleRate: SAMPLE_RATE
+            sampleRate: ACTUAL_SAMPLE_RATE
           }));
 
           // Log progress (throttled)
@@ -209,7 +210,7 @@ async function handleRenderRequest(ws, message) {
       totalChunks: chunkIndex,
       totalSamples,
       duration,
-      sampleRate: SAMPLE_RATE
+      sampleRate: ACTUAL_SAMPLE_RATE
     }));
 
     // Note: sharedAudioContext is reused, only offlineContext needs cleanup
@@ -263,7 +264,7 @@ wss.on('connection', (ws, req) => {
   ws.send(JSON.stringify({
     type: 'welcome',
     message: 'Connected to Kromosynth Render Socket',
-    sampleRate: SAMPLE_RATE
+    sampleRate: typeof ACTUAL_SAMPLE_RATE !== 'undefined' ? ACTUAL_SAMPLE_RATE : SAMPLE_RATE
   }));
 });
 

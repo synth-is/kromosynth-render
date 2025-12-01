@@ -8,16 +8,16 @@ import net from 'net';
 const argv = parseArgs(process.argv.slice(2));
 let port;
 let host;
-if( argv.hostInfoFilePath ) {
+if (argv.hostInfoFilePath) {
   // automatically assign port and write the info to the specified file path
   console.log("--- argv.hostInfoFilePath:", argv.hostInfoFilePath);
   let hostInfoFilePath;
-  if( process.env.pm_id ) { // being managed by PM2
+  if (process.env.pm_id) { // being managed by PM2
     hostInfoFilePath = `${argv.hostInfoFilePath}${parseInt(process.env.pm_id) + 1}`;
   } else {
     hostInfoFilePath = argv.hostInfoFilePath;
   }
-  port = await filepathToPort( hostInfoFilePath );
+  port = await filepathToPort(hostInfoFilePath);
   host = argv.host || os.hostname();
   const hostname = `${host}:${port}`;
   console.log("--- hostname:", hostname);
@@ -31,23 +31,24 @@ const processTitle = argv.processTitle || 'kromosynth-render-socket-server';
 process.title = processTitle;
 process.on('SIGINT', () => process.exit(1)); // so it can be stopped with Ctrl-C
 
-const wss = new WebSocketServer({ 
+const wss = new WebSocketServer({
   host, port,
   maxPayload: 100 * 1024 * 1024 // 100 MB
 });
 
 wss.on("connection", async function connection(ws) {
   // console.log("connection");
-  ws.on('error', function(err) {
+  ws.on('error', function (err) {
     console.error("WebSocket error:", err);
-    ws.send( JSON.stringify({error: err}) );
+    ws.send(JSON.stringify({ error: err }));
     ws.close();
   });
   ws.on("message", async function incoming(message) {
     const messageParsed = JSON.parse(message);
-    // console.log("received: %s", messageParsed);
-    console.log(`rendering sound from genome at duration ${messageParsed.duration} with noteDelta ${messageParsed.noteDelta}, velocity ${messageParsed.velocity} and sample rate ${messageParsed.sampleRate}...`);
+    console.log(`rendering sound from genome ${messageParsed.genomeId || 'inline'} at duration ${messageParsed.duration} with noteDelta ${messageParsed.noteDelta}, velocity ${messageParsed.velocity} and sample rate ${messageParsed.sampleRate}...`);
+
     const {
+      genomeId,
       genomeString,
       duration,
       noteDelta,
@@ -59,8 +60,54 @@ wss.on("connection", async function connection(ws) {
       sampleCountToActivate,
       sampleOffset,
     } = messageParsed;
+
+    // Get genome either from genomeId (fetch from REST API) or genomeString (inline)
+    let genomeData;
+    if (genomeId) {
+      // Fetch from REST API
+      try {
+        // REST API URL format: http://127.0.0.1:4004/evoruns/{evoRunId}/genome/{genomeId}?format=raw
+        const EVORUNS_SERVER_URL = process.env.EVORUNS_SERVER_URL || 'http://127.0.0.1:4004';
+
+        // We need the evoRunId to construct the URL
+        // For now, we'll need to get it from the message or use a default
+        // The streaming server gets this from the client request
+        const evoRunId = messageParsed.evoRunId;
+
+        if (!evoRunId) {
+          ws.send(JSON.stringify({ error: 'evoRunId is required when using genomeId' }));
+          return;
+        }
+
+        const genomeUrl = `${EVORUNS_SERVER_URL}/evoruns/${evoRunId}/genome/${genomeId}?format=raw`;
+        console.log(`Fetching genome from: ${genomeUrl}`);
+
+        const fetch = (await import('node-fetch')).default;
+        const response = await fetch(genomeUrl);
+
+        if (!response.ok) {
+          throw new Error(`Failed to fetch genome: ${response.status} ${response.statusText}`);
+        }
+
+        const genomeJson = await response.text();
+        genomeData = genomeJson;
+
+        console.log(`✓ Loaded genome ${genomeId} from REST API`);
+      } catch (error) {
+        console.error(`Error loading genome ${genomeId}:`, error);
+        ws.send(JSON.stringify({ error: error.message }));
+        return;
+      }
+    } else if (genomeString) {
+      // Use provided genome string
+      genomeData = genomeString;
+    } else {
+      ws.send(JSON.stringify({ error: 'Must provide either genomeId or genomeString' }));
+      return;
+    }
+
     const audioBuffer = await generateAudioDataFromGenomeString(
-      genomeString,
+      genomeData,
       duration,
       noteDelta,
       velocity,
@@ -74,18 +121,19 @@ wss.on("connection", async function connection(ws) {
       true, // asDataArray
       sampleCountToActivate,
       sampleOffset,
-    ).catch( error => {
+    ).catch(error => {
       console.error(error);
-      ws.send( null );
+      ws.send(null);
     });
+
     let buffer;
-    if( audioBuffer ) {
-      const audioData = audioBuffer; // new Float32Array(audioBuffer.getChannelData(0)); // new Float32Array as the result from .getChannelData() seems to become detatched
+    if (audioBuffer) {
+      const audioData = audioBuffer;
       buffer = Buffer.from(audioData.buffer);
     } else {
       buffer = null;
     }
-    ws.send( buffer );
+    ws.send(buffer);
   });
 });
 
@@ -94,10 +142,10 @@ console.log(`Rendering WebSocket server listening on port ${port}`);
 
 function isPortTaken(port) {
   return new Promise((resolve) => {
-      const server = net.createServer()
-          .once('error', () => resolve(true))
-          .once('listening', () => server.once('close', () => resolve(false)).close())
-          .listen(port);
+    const server = net.createServer()
+      .once('error', () => resolve(true))
+      .once('listening', () => server.once('close', () => resolve(false)).close())
+      .listen(port);
   });
 }
 
@@ -108,11 +156,11 @@ async function filepathToPort(filepath, variation = 0) {
   let port = 1024 + shortHash % (65535 - 1024);
   let isTaken = await isPortTaken(port);
 
-  if(isTaken) {
-      console.log(`--- filepathToPort(${filepath}): port ${port} taken`)
-      return await filepathToPort(filepath, variation + 1);
+  if (isTaken) {
+    console.log(`--- filepathToPort(${filepath}): port ${port} taken`)
+    return await filepathToPort(filepath, variation + 1);
   } else {
-      console.log(`--- filepathToPort(${filepath}): port ${port} available`);
-      return port;
+    console.log(`--- filepathToPort(${filepath}): port ${port} available`);
+    return port;
   }
 }
