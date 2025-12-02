@@ -72,9 +72,9 @@ async function loadGenome(genomeIdOrData) {
 
 // Handle render request
 async function handleRenderRequest(ws, message) {
-  const { genomeId, genome, duration, noteDelta = 0, velocity = 1.0, useGPU = false } = message;
+  const { genomeId, genome, duration, noteDelta = 0, velocity = 1.0, useGPU = false, requestId } = message;
 
-  console.log(`📥 Render request: ${genomeId || 'inline genome'} (${duration}s, note=${noteDelta}, vel=${velocity})`);
+  console.log(`📥 Render request: ${genomeId || 'inline genome'} (${duration}s, note=${noteDelta}, vel=${velocity}) [${requestId || 'no-id'}]`);
 
   try {
     // Use provided genome data if available, otherwise load from database
@@ -169,6 +169,7 @@ async function handleRenderRequest(ws, message) {
           // Send chunk to client
           ws.send(JSON.stringify({
             type: 'chunk',
+            requestId,  // Echo back request ID
             index: chunkIndex,
             data: Array.from(chunkData), // Convert Float32Array to regular array for JSON
             timestamp,
@@ -207,6 +208,7 @@ async function handleRenderRequest(ws, message) {
     // Send completion message BEFORE cleanup
     ws.send(JSON.stringify({
       type: 'complete',
+      requestId,  // Echo back request ID
       totalChunks: chunkIndex,
       totalSamples,
       duration,
