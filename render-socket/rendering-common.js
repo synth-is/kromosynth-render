@@ -22,7 +22,6 @@ export function getNewOfflineAudioContext(duration, sampleRate = SAMPLE_RATE) {
 	const offlineAudioContext = new OfflineAudioContext({
 		numberOfChannels: 2,
 		length: Math.round(sampleRate * duration),
-		// length: SAMPLE_RATE * duration,
 		sampleRate
 	});
 	// offlineAudioContext.destination.channelCount = 1;
@@ -103,7 +102,7 @@ export async function generateAudioDataFromGenomeString(
 		genomeAndMeta,
 		duration, noteDelta, velocity, reverse,
 		asDataArray,
-		undefined, // getNewOfflineAudioContext( duration, sampleRate ),
+		getNewOfflineAudioContext( duration, sampleRate ),
 		getAudioContext(sampleRate),
 		useOvertoneInharmonicityFactors,
 		useGPU,
