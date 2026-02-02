@@ -134,6 +134,14 @@ wss.on("connection", async function connection(ws) {
       buffer = null;
     }
     ws.send(buffer);
+    
+    // Close connection after sending response
+    ws.close();
+    
+    // Force garbage collection if available (requires --expose-gc flag)
+    if (global.gc) {
+      global.gc();
+    }
   });
 });
 
