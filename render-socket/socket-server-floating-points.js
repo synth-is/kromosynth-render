@@ -91,6 +91,7 @@ wss.on("connection", async function connection(ws) {
       velocity,
       useGPU,
       antiAliasing,
+      useOvertoneInharmonicityFactors,
       frequencyUpdatesApplyToAllPathcNetworkOutputs,
       sampleRate,
       sampleCountToActivate,
@@ -173,7 +174,7 @@ wss.on("connection", async function connection(ws) {
       noteDelta,
       velocity,
       false, // reverse
-      true, // useOvertoneInharmonicityFactors
+      useOvertoneInharmonicityFactors !== undefined ? useOvertoneInharmonicityFactors : false, // default false to match browser preview
       false, // overrideGenomeDurationNoteDeltaAndVelocity
       useGPU,
       antiAliasing,

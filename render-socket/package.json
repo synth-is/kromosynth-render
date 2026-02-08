@@ -23,6 +23,7 @@
   },
   "homepage": "https://github.com/synth-is/kromosynth-render#readme",
   "dependencies": {
+    "better-sqlite3": "^11.10.0",
     "kromosynth": "^1.0.35",
     "minimist": "^1.2.8",
     "node-fetch": "^3.3.1",
