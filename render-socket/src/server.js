@@ -116,6 +116,22 @@ async function handleRenderRequest(ws, message) {
       reverse: false
     };
 
+    // Genome fingerprint for render parity diagnosis
+    const crypto = await import('crypto');
+    const patchStr = JSON.stringify(genomeData.asNEATPatch);
+    const waveStr = JSON.stringify(genomeData.waveNetwork);
+    const patchHash = crypto.createHash('md5').update(patchStr).digest('hex').slice(0, 12);
+    const waveHash = crypto.createHash('md5').update(waveStr).digest('hex').slice(0, 12);
+    console.log('🔬 RENDER FINGERPRINT (streaming-server):', {
+      patchHash, waveHash,
+      patchLen: patchStr.length, waveLen: waveStr.length,
+      nodeCount: genomeData.asNEATPatch?.nodes?.length,
+      connCount: genomeData.asNEATPatch?.connections?.length,
+      firstNodeType: typeof genomeData.asNEATPatch?.nodes?.[0],
+      duration, noteDelta, velocity,
+      sampleRate: ACTUAL_SAMPLE_RATE, useGPU
+    });
+
     // State for client-controlled rendering
     const renderState = {
       clientPosition: 0,        // Last reported playback position from client

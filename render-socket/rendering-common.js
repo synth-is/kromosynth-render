@@ -92,19 +92,6 @@ export async function generateAudioDataFromGenomeString(
 		actualGenome.asNEATPatch.toJSON = function() { return this; };
 	}
 
-	// Diagnostic: log genome structure after unwrapping
-	const cppnKeys = actualGenome.waveNetwork?.CPPNs ? Object.keys(actualGenome.waveNetwork.CPPNs) : [];
-	console.log('🔍 rendering-common: genome after unwrap:', {
-		keys: Object.keys(actualGenome),
-		hasAsNEATPatch: !!actualGenome.asNEATPatch,
-		asNEATPatchType: typeof actualGenome.asNEATPatch,
-		asNEATPatchHasNodes: actualGenome.asNEATPatch?.nodes?.length,
-		asNEATPatchHasOffspring: !!actualGenome.asNEATPatch?.offspring,
-		hasWaveNetwork: !!actualGenome.waveNetwork,
-		cppnCount: cppnKeys.length,
-		cppnKeysSample: cppnKeys.slice(0, 5)
-	});
-
 	const genomeAndMeta = {
 		genome: actualGenome,
 		duration: _duration,
@@ -114,16 +101,21 @@ export async function generateAudioDataFromGenomeString(
 		useOvertoneInharmonicityFactors
 	};
 
-	console.log('genomeAndMeta structure:', {
-	  hasGenome: !!genomeAndMeta.genome,
-	  genomeType: typeof genomeAndMeta.genome,
-	  genomeKeys: genomeAndMeta.genome ? Object.keys(genomeAndMeta.genome) : 'N/A',
-	  hasAsNEATPatch: !!genomeAndMeta.genome?.asNEATPatch,
-	  asNEATPatchType: typeof genomeAndMeta.genome?.asNEATPatch,
-	  hasWaveNetwork: !!genomeAndMeta.genome?.waveNetwork,
-	  duration: _duration,
-	  noteDelta: _noteDelta,
-	  velocity: _velocity
+	// Genome fingerprint for render parity diagnosis
+	const crypto = await import('crypto');
+	const patchStr = JSON.stringify(actualGenome.asNEATPatch);
+	const waveStr = JSON.stringify(actualGenome.waveNetwork);
+	const patchHash = crypto.createHash('md5').update(patchStr).digest('hex').slice(0, 12);
+	const waveHash = crypto.createHash('md5').update(waveStr).digest('hex').slice(0, 12);
+	console.log('🔬 RENDER FINGERPRINT (rendering-common):', {
+		patchHash, waveHash,
+		patchLen: patchStr.length, waveLen: waveStr.length,
+		nodeCount: actualGenome.asNEATPatch?.nodes?.length,
+		connCount: actualGenome.asNEATPatch?.connections?.length,
+		firstNodeType: typeof actualGenome.asNEATPatch?.nodes?.[0],
+		duration: _duration, noteDelta: _noteDelta, velocity: _velocity,
+		sampleRate, useGPU, antiAliasing, useOvertoneInharmonicityFactors,
+		asDataArray
 	});
 
 	// const audioContext = await getAudioContext();
