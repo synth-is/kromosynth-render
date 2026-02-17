@@ -92,6 +92,19 @@ export async function generateAudioDataFromGenomeString(
 		actualGenome.asNEATPatch.toJSON = function() { return this; };
 	}
 
+	// Diagnostic: log genome structure after unwrapping
+	const cppnKeys = actualGenome.waveNetwork?.CPPNs ? Object.keys(actualGenome.waveNetwork.CPPNs) : [];
+	console.log('🔍 rendering-common: genome after unwrap:', {
+		keys: Object.keys(actualGenome),
+		hasAsNEATPatch: !!actualGenome.asNEATPatch,
+		asNEATPatchType: typeof actualGenome.asNEATPatch,
+		asNEATPatchHasNodes: actualGenome.asNEATPatch?.nodes?.length,
+		asNEATPatchHasOffspring: !!actualGenome.asNEATPatch?.offspring,
+		hasWaveNetwork: !!actualGenome.waveNetwork,
+		cppnCount: cppnKeys.length,
+		cppnKeysSample: cppnKeys.slice(0, 5)
+	});
+
 	const genomeAndMeta = {
 		genome: actualGenome,
 		duration: _duration,
