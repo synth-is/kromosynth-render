@@ -101,11 +101,12 @@ async function handleRenderRequest(ws, message) {
     const { StreamingRenderer } = await import(`${KROMOSYNTH_PATH}/util/streaming-renderer.js`);
 
     // Create offline context (one per render).
-    // Always use 1 channel: normalizeAudioBuffer() only reads channel 0, so the
-    // old N-channel trick only captured wave 0 (not a real mix). node-web-audio-api
-    // >= 1.0.8 correctly down-mixes channelMerger(N) → 1ch destination per spec.
+    // Batch uses N channels so channelMerger routes each wave to its own channel
+    // without down-mix loss; we sum manually after startRendering().
+    // Streaming uses 1 channel (AudioWorklet captures correctly there).
+    const numChannels = batch ? batchChannels : 1;
     const offlineContext = new OfflineAudioContext({
-      numberOfChannels: 1,
+      numberOfChannels: numChannels,
       length: Math.round(ACTUAL_SAMPLE_RATE * duration),
       sampleRate: ACTUAL_SAMPLE_RATE
     });
@@ -136,48 +137,80 @@ async function handleRenderRequest(ws, message) {
 
     if (batch) {
       // ═══════════════════════════════════════════════════════════════
-      // BATCH MODE: Direct startRendering() with 1-channel context.
-      // No AudioWorklet, no suspend/resume — 5×+ real-time speed.
+      // BATCH MODE: N-channel OfflineAudioContext, direct startRendering().
+      // We bypass renderAudioAndSpectrogram/normalizeAudioBuffer because those
+      // only read channel 0 of the rendered buffer. Instead we:
+      //   1. Run CPPN activation (startMemberOutputsRendering)
+      //   2. Wire the audio graph directly (wireUpAudioGraph / renderNetworksOutputSamplesAsAudioBuffer)
+      //   3. Call offlineContext.startRendering() ourselves
+      //   4. Sum ALL N channels manually → proper mix of all audio waves
+      //   5. Peak-normalise the summed mono signal
       // ═══════════════════════════════════════════════════════════════
-      console.log(`⚡ Batch mode: 1ch OfflineAudioContext, direct startRendering()`);
+      console.log(`⚡ Batch mode: ${numChannels}ch OfflineAudioContext, direct startRendering()`);
 
-      const { renderAudioAndSpectrogram } = await import(`${KROMOSYNTH_PATH}/util/render.js`);
+      const { startMemberOutputsRendering, startAudioBuffersRendering } = await import(`${KROMOSYNTH_PATH}/util/render.js`);
+      const { patchFromAsNEATnetwork } = await import(`${KROMOSYNTH_PATH}/util/audio-graph-asNEAT-bridge.js`);
 
       const startTime = performance.now();
-      const cppnStart = startTime;
-      const audioBufferAndCanvas = await renderAudioAndSpectrogram(
-        genomeData.asNEATPatch,
-        genomeData.waveNetwork,
-        duration,
-        noteDelta,
-        velocity,
-        ACTUAL_SAMPLE_RATE,
-        false,  // reverse
-        false,  // asDataArray
-        offlineContext,
-        sharedAudioContext,
-        false,  // useOvertoneInharmonicityFactors
+
+      // 1. Build patch from NEAT network
+      const asNEATNetworkJSONString = typeof genomeData.asNEATPatch === 'string'
+        ? genomeData.asNEATPatch
+        : genomeData.asNEATPatch.toJSON ? genomeData.asNEATPatch.toJSON() : JSON.stringify(genomeData.asNEATPatch);
+      const synthIsPatch = patchFromAsNEATnetwork(asNEATNetworkJSONString);
+
+      // 2. Run CPPN activation to get memberOutputs
+      const { memberOutputs, patch: modifiedPatch } = await startMemberOutputsRendering(
+        genomeData.waveNetwork, synthIsPatch,
+        duration, noteDelta, ACTUAL_SAMPLE_RATE, velocity,
+        false, // reverse
+        false, // useOvertoneInharmonicityFactors
         useGPU,
-        false,  // antiAliasing
-        false,  // frequencyUpdatesApplyToAllPathcNetworkOutputs
+        false, // antiAliasing
+        false, // frequencyUpdatesApplyToAllPathcNetworkOutputs
       );
 
-      const renderTime = (performance.now() - startTime) / 1000;
-      console.log(`  ⏱️  Total render wall time: ${renderTime.toFixed(2)}s`);
-      const audioBuffer = audioBufferAndCanvas ? audioBufferAndCanvas.audioBuffer : null;
+      // 3. Wire audio graph into the N-channel offline context, then startRendering()
+      //    We call renderNetworksOutputSamplesAsAudioBuffer which internally calls
+      //    wireUpAudioGraphAndConnectToAudioContextDestination + startRendering()
+      //    and returns the rendered AudioBuffer (normalizeAudioBuffer will only read ch0,
+      //    but we need the RAW buffer, so we intercept startRendering directly).
+      //
+      //    Instead: wire the graph, then call offlineContext.startRendering() ourselves.
+      const Renderer = (await import(`${KROMOSYNTH_PATH}/cppn-neat/network-rendering.js`)).default;
+      const renderer = new Renderer(ACTUAL_SAMPLE_RATE);
 
-      if (!audioBuffer) {
-        throw new Error('Batch render returned no audio buffer');
-      }
+      const sampleCount = Math.round(ACTUAL_SAMPLE_RATE * duration);
+      await renderer.wireUpAudioGraphAndConnectToAudioContextDestination(
+        memberOutputs, modifiedPatch || synthIsPatch, noteDelta,
+        offlineContext,
+        sampleCount,
+        null, // wrapperNodes
+        'batch', // mode
+        null // captureNode
+      );
 
-      // Sum all channels to mono
-      const totalSamples = audioBuffer.length;
+      // 4. Render and sum ALL channels
+      const rawBuffer = await offlineContext.startRendering();
+      const chCount = rawBuffer.numberOfChannels;
+      const totalSamples = rawBuffer.length;
       const summed = new Float32Array(totalSamples);
-      const chCount = audioBuffer.numberOfChannels;
       for (let ch = 0; ch < chCount; ch++) {
-        const chData = audioBuffer.getChannelData(ch);
+        const chData = rawBuffer.getChannelData(ch);
         for (let i = 0; i < totalSamples; i++) summed[i] += chData[i];
       }
+
+      // 5. Peak-normalise the summed mono signal
+      let peak = 0;
+      for (let i = 0; i < summed.length; i++) {
+        const abs = Math.abs(summed[i]);
+        if (abs > peak) peak = abs;
+      }
+      if (peak > 0) {
+        for (let i = 0; i < summed.length; i++) summed[i] /= peak;
+      }
+
+      const renderTime = (performance.now() - startTime) / 1000;
 
       console.log(`✅ Batch render complete: ${renderTime.toFixed(2)}s for ${duration}s audio (${(duration/renderTime).toFixed(1)}× real-time), ${chCount}ch summed to mono`);
 
