@@ -27,7 +27,7 @@
     "kromosynth": "^1.0.35",
     "minimist": "^1.2.8",
     "node-fetch": "^3.3.1",
-    "node-web-audio-api": "^0.21.3",
+    "node-web-audio-api": "^1.0.8",
     "virtual-audio-graph": "github:synth-is/virtual-audio-graph",
     "websocket": "^1.0.34",
     "ws": "^8.14.1"
