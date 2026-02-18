@@ -72,7 +72,7 @@ async function loadGenome(genomeIdOrData) {
 
 // Handle render request
 async function handleRenderRequest(ws, message) {
-  const { genomeId, genome, duration, noteDelta = 0, velocity = 1.0, useGPU = false, requestId, batch = false, batchChannels = 8 } = message;
+  const { genomeId, genome, duration, noteDelta = 0, velocity = 1.0, useGPU = false, requestId, batch = false, batchChannels = 8, controlledResume = true } = message;
 
   console.log(`📥 Render request: ${genomeId || 'inline genome'} (${duration}s, note=${noteDelta}, vel=${velocity}) [${requestId || 'no-id'}]`);
 
@@ -212,7 +212,7 @@ async function handleRenderRequest(ws, message) {
 
       const renderTime = (performance.now() - startTime) / 1000;
 
-      console.log(`✅ Batch render complete: ${renderTime.toFixed(2)}s for ${duration}s audio (${(duration/renderTime).toFixed(1)}× real-time), ${chCount}ch summed to mono`);
+      console.log(`✅ Batch render complete: ${renderTime.toFixed(2)}s for ${duration}s audio (${(duration / renderTime).toFixed(1)}× real-time), ${chCount}ch summed to mono`);
 
       // Send audio as binary Float32Array (avoids slow JSON serialization of millions of floats)
       // Protocol: JSON header first, then binary payload
@@ -238,8 +238,9 @@ async function handleRenderRequest(ws, message) {
 
     } else {
       // ═══════════════════════════════════════════════════════════════
-      // STREAMING MODE: AudioWorklet capture with controlled resume
-      // For live browser preview — paced to client playback position.
+      // STREAMING MODE: AudioWorklet capture
+      // controlledResume=true: paced to client playback position (browser preview)
+      // controlledResume=false: full-speed straight through (WAV capture / VI render)
       // ═══════════════════════════════════════════════════════════════
 
       const renderState = {
@@ -254,7 +255,7 @@ async function handleRenderRequest(ws, message) {
         measureRTF: false,
         defaultChunkDuration: 0.25,
         enableAdaptiveChunking: true,
-        controlledResume: true,
+        controlledResume,
         initialBufferDuration: 2.0,
         bufferAhead: 2.0
       });
