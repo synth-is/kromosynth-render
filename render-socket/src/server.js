@@ -263,7 +263,7 @@ async function handleRenderRequest(ws, message) {
       let chunkIndex = 0;
       let totalSamples = 0;
 
-      // Listen for playback position updates from client
+      // Listen for playback position updates from client (only needed in controlledResume mode)
       const positionHandler = (data) => {
         try {
           const message = JSON.parse(data);
@@ -274,10 +274,16 @@ async function handleRenderRequest(ws, message) {
           // Ignore parse errors
         }
       };
-      ws.on('message', positionHandler);
+      if (controlledResume) ws.on('message', positionHandler);
+
+      // In WAV-capture mode (controlledResume=false) accumulate chunks server-side and send
+      // a single binary payload at the end — avoids flooding the WebSocket with hundreds of
+      // large JSON messages (700+ chunks × ~30KB JSON each = ~20MB for a 60s render).
+      const capturedChunks = controlledResume ? null : [];
 
       console.log(`🎬 Starting streaming render for ${genomeId}...`);
 
+      const startTime = performance.now();
       const renderPromise = renderer.render(
         genomeAndMeta,
         duration,
@@ -289,17 +295,23 @@ async function handleRenderRequest(ws, message) {
             const timestamp = totalSamples / ACTUAL_SAMPLE_RATE;
             renderState.renderedDuration = timestamp;
 
-            ws.send(JSON.stringify({
-              type: 'chunk',
-              requestId,
-              index: chunkIndex,
-              data: Array.from(chunkData),
-              timestamp,
-              sampleRate: ACTUAL_SAMPLE_RATE
-            }));
+            if (controlledResume) {
+              // Browser preview: stream each chunk as JSON for immediate playback
+              ws.send(JSON.stringify({
+                type: 'chunk',
+                requestId,
+                index: chunkIndex,
+                data: Array.from(chunkData),
+                timestamp,
+                sampleRate: ACTUAL_SAMPLE_RATE
+              }));
+            } else {
+              // WAV capture: accumulate locally — send one binary blob at the end
+              capturedChunks.push(new Float32Array(chunkData));
+            }
 
             if (chunkIndex % 10 === 0 || timestamp >= duration) {
-              console.log(`  📤 Sent chunk ${chunkIndex} (${timestamp.toFixed(2)}s / ${duration}s, client @ ${renderState.clientPosition.toFixed(2)}s)`);
+              console.log(`  📤 ${controlledResume ? 'Sent' : 'Captured'} chunk ${chunkIndex} (${timestamp.toFixed(2)}s / ${duration}s)`);
             }
           },
 
@@ -315,19 +327,36 @@ async function handleRenderRequest(ws, message) {
       );
 
       await renderPromise;
-      ws.off('message', positionHandler);
+      if (controlledResume) ws.off('message', positionHandler);
 
-      console.log(`✅ Render complete: ${chunkIndex} chunks, ${duration}s`);
+      const renderTime = (performance.now() - startTime) / 1000;
+      console.log(`✅ Render complete: ${chunkIndex} chunks, ${duration}s (${(duration / renderTime).toFixed(1)}× real-time)`);
       console.log();
 
-      ws.send(JSON.stringify({
-        type: 'complete',
-        requestId,
-        totalChunks: chunkIndex,
-        totalSamples,
-        duration,
-        sampleRate: ACTUAL_SAMPLE_RATE
-      }));
+      if (controlledResume) {
+        // Browser preview: all chunks already sent, just signal completion
+        ws.send(JSON.stringify({
+          type: 'complete',
+          requestId,
+          totalChunks: chunkIndex,
+          totalSamples,
+          duration,
+          sampleRate: ACTUAL_SAMPLE_RATE
+        }));
+      } else {
+        // WAV capture: concatenate, peak-normalise, send as single binary blob
+        const combined = new Float32Array(totalSamples);
+        let offset = 0;
+        for (const chunk of capturedChunks) { combined.set(chunk, offset); offset += chunk.length; }
+
+        let peak = 0;
+        for (let i = 0; i < combined.length; i++) { const a = Math.abs(combined[i]); if (a > peak) peak = a; }
+        if (peak > 0) for (let i = 0; i < combined.length; i++) combined[i] /= peak;
+
+        ws.send(JSON.stringify({ type: 'batch-result', requestId, totalSamples, duration, sampleRate: ACTUAL_SAMPLE_RATE }));
+        ws.send(Buffer.from(combined.buffer, combined.byteOffset, combined.byteLength));
+        ws.send(JSON.stringify({ type: 'complete', requestId, totalChunks: chunkIndex, totalSamples, duration, sampleRate: ACTUAL_SAMPLE_RATE }));
+      }
     }
 
     // Note: sharedAudioContext is reused, only offlineContext needs cleanup
