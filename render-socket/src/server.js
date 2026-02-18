@@ -100,12 +100,12 @@ async function handleRenderRequest(ws, message) {
     // Import StreamingRenderer
     const { StreamingRenderer } = await import(`${KROMOSYNTH_PATH}/util/streaming-renderer.js`);
 
-    // Create offline context (one per render)
-    // For batch mode: use high channel count to avoid broken down-mix in node-web-audio-api,
-    // then sum channels manually. This gives 5×+ real-time speed with clean audio.
-    const numChannels = batch ? batchChannels : 1;
+    // Create offline context (one per render).
+    // Always use 1 channel: normalizeAudioBuffer() only reads channel 0, so the
+    // old N-channel trick only captured wave 0 (not a real mix). node-web-audio-api
+    // >= 1.0.8 correctly down-mixes channelMerger(N) → 1ch destination per spec.
     const offlineContext = new OfflineAudioContext({
-      numberOfChannels: numChannels,
+      numberOfChannels: 1,
       length: Math.round(ACTUAL_SAMPLE_RATE * duration),
       sampleRate: ACTUAL_SAMPLE_RATE
     });
@@ -136,12 +136,10 @@ async function handleRenderRequest(ws, message) {
 
     if (batch) {
       // ═══════════════════════════════════════════════════════════════
-      // BATCH MODE: Direct startRendering() with multi-channel context
+      // BATCH MODE: Direct startRendering() with 1-channel context.
       // No AudioWorklet, no suspend/resume — 5×+ real-time speed.
-      // node-web-audio-api's down-mix from channelMerger to 1ch is broken,
-      // so we render to N channels and sum manually.
       // ═══════════════════════════════════════════════════════════════
-      console.log(`⚡ Batch mode: ${numChannels}ch OfflineAudioContext, direct startRendering()`);
+      console.log(`⚡ Batch mode: 1ch OfflineAudioContext, direct startRendering()`);
 
       const { renderAudioAndSpectrogram } = await import(`${KROMOSYNTH_PATH}/util/render.js`);
 
