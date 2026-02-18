@@ -72,7 +72,7 @@ async function loadGenome(genomeIdOrData) {
 
 // Handle render request
 async function handleRenderRequest(ws, message) {
-  const { genomeId, genome, duration, noteDelta = 0, velocity = 1.0, useGPU = false, requestId } = message;
+  const { genomeId, genome, duration, noteDelta = 0, velocity = 1.0, useGPU = false, requestId, batch = false, batchChannels = 8 } = message;
 
   console.log(`📥 Render request: ${genomeId || 'inline genome'} (${duration}s, note=${noteDelta}, vel=${velocity}) [${requestId || 'no-id'}]`);
 
@@ -101,9 +101,11 @@ async function handleRenderRequest(ws, message) {
     const { StreamingRenderer } = await import(`${KROMOSYNTH_PATH}/util/streaming-renderer.js`);
 
     // Create offline context (one per render)
-    // Reuse shared AudioContext (warm, with AudioWorklet pre-loaded)
+    // For batch mode: use high channel count to avoid broken down-mix in node-web-audio-api,
+    // then sum channels manually. This gives 5×+ real-time speed with clean audio.
+    const numChannels = batch ? batchChannels : 1;
     const offlineContext = new OfflineAudioContext({
-      numberOfChannels: 1,
+      numberOfChannels: numChannels,
       length: Math.round(ACTUAL_SAMPLE_RATE * duration),
       sampleRate: ACTUAL_SAMPLE_RATE
     });
@@ -132,104 +134,169 @@ async function handleRenderRequest(ws, message) {
       sampleRate: ACTUAL_SAMPLE_RATE, useGPU
     });
 
-    // State for client-controlled rendering
-    const renderState = {
-      clientPosition: 0,        // Last reported playback position from client
-      renderedDuration: 0,      // How much we've rendered so far
-      totalDuration: duration,
-      bufferAhead: 2.0          // How far ahead to stay (matches renderer default)
-    };
+    if (batch) {
+      // ═══════════════════════════════════════════════════════════════
+      // BATCH MODE: Direct startRendering() with multi-channel context
+      // No AudioWorklet, no suspend/resume — 5×+ real-time speed.
+      // node-web-audio-api's down-mix from channelMerger to 1ch is broken,
+      // so we render to N channels and sum manually.
+      // ═══════════════════════════════════════════════════════════════
+      console.log(`⚡ Batch mode: ${numChannels}ch OfflineAudioContext, direct startRendering()`);
 
-    // Create renderer with controlled resume enabled
-    const renderer = new StreamingRenderer(sharedAudioContext, ACTUAL_SAMPLE_RATE, {
-      useGPU,
-      measureRTF: false,
-      defaultChunkDuration: 0.25,
-      enableAdaptiveChunking: true,
-      controlledResume: true,
-      initialBufferDuration: 2.0,
-      bufferAhead: 2.0
-    });
+      const { renderAudioAndSpectrogram } = await import(`${KROMOSYNTH_PATH}/util/render.js`);
 
-    let chunkIndex = 0;
-    let totalSamples = 0;
+      const startTime = performance.now();
+      const cppnStart = startTime;
+      const audioBufferAndCanvas = await renderAudioAndSpectrogram(
+        genomeData.asNEATPatch,
+        genomeData.waveNetwork,
+        duration,
+        noteDelta,
+        velocity,
+        ACTUAL_SAMPLE_RATE,
+        false,  // reverse
+        false,  // asDataArray
+        offlineContext,
+        sharedAudioContext,
+        false,  // useOvertoneInharmonicityFactors
+        useGPU,
+        false,  // antiAliasing
+        false,  // frequencyUpdatesApplyToAllPathcNetworkOutputs
+      );
 
-    // Listen for playback position updates from client
-    const positionHandler = (data) => {
-      try {
-        const message = JSON.parse(data);
-        if (message.type === 'playback-position') {
-          renderState.clientPosition = message.position;
-          // console.log(`  📍 Client position: ${message.position.toFixed(2)}s`);
-        }
-      } catch (e) {
-        // Ignore parse errors
+      const renderTime = (performance.now() - startTime) / 1000;
+      console.log(`  ⏱️  Total render wall time: ${renderTime.toFixed(2)}s`);
+      const audioBuffer = audioBufferAndCanvas ? audioBufferAndCanvas.audioBuffer : null;
+
+      if (!audioBuffer) {
+        throw new Error('Batch render returned no audio buffer');
       }
-    };
-    ws.on('message', positionHandler);
 
-    // Start rendering with chunk callback
-    console.log(`🎬 Starting adaptive render for ${genomeId}...`);
+      // Sum all channels to mono
+      const totalSamples = audioBuffer.length;
+      const summed = new Float32Array(totalSamples);
+      const chCount = audioBuffer.numberOfChannels;
+      for (let ch = 0; ch < chCount; ch++) {
+        const chData = audioBuffer.getChannelData(ch);
+        for (let i = 0; i < totalSamples; i++) summed[i] += chData[i];
+      }
 
-    const renderPromise = renderer.render(
-      genomeAndMeta,
-      duration,
-      offlineContext,
-      {
-        onChunk: (chunkData) => {
-          chunkIndex++;
-          totalSamples += chunkData.length;
-          const timestamp = totalSamples / ACTUAL_SAMPLE_RATE;
-          renderState.renderedDuration = timestamp;
+      console.log(`✅ Batch render complete: ${renderTime.toFixed(2)}s for ${duration}s audio (${(duration/renderTime).toFixed(1)}× real-time), ${chCount}ch summed to mono`);
 
-          // Send chunk to client
-          ws.send(JSON.stringify({
-            type: 'chunk',
-            requestId,  // Echo back request ID
-            index: chunkIndex,
-            data: Array.from(chunkData), // Convert Float32Array to regular array for JSON
-            timestamp,
-            sampleRate: ACTUAL_SAMPLE_RATE
-          }));
+      // Send audio as binary Float32Array (avoids slow JSON serialization of millions of floats)
+      // Protocol: JSON header first, then binary payload
+      ws.send(JSON.stringify({
+        type: 'batch-result',
+        requestId,
+        totalSamples,
+        duration,
+        sampleRate: ACTUAL_SAMPLE_RATE
+      }));
+      // Send raw bytes
+      ws.send(Buffer.from(summed.buffer, summed.byteOffset, summed.byteLength));
 
-          // Log progress (throttled)
-          if (chunkIndex % 10 === 0 || timestamp >= duration) {
-            console.log(`  📤 Sent chunk ${chunkIndex} (${timestamp.toFixed(2)}s / ${duration}s, client @ ${renderState.clientPosition.toFixed(2)}s)`);
+      // Also send standard 'complete' for protocol compatibility
+      ws.send(JSON.stringify({
+        type: 'complete',
+        requestId,
+        totalChunks: 1,
+        totalSamples,
+        duration,
+        sampleRate: ACTUAL_SAMPLE_RATE
+      }));
+
+    } else {
+      // ═══════════════════════════════════════════════════════════════
+      // STREAMING MODE: AudioWorklet capture with controlled resume
+      // For live browser preview — paced to client playback position.
+      // ═══════════════════════════════════════════════════════════════
+
+      const renderState = {
+        clientPosition: 0,
+        renderedDuration: 0,
+        totalDuration: duration,
+        bufferAhead: 2.0
+      };
+
+      const renderer = new StreamingRenderer(sharedAudioContext, ACTUAL_SAMPLE_RATE, {
+        useGPU,
+        measureRTF: false,
+        defaultChunkDuration: 0.25,
+        enableAdaptiveChunking: true,
+        controlledResume: true,
+        initialBufferDuration: 2.0,
+        bufferAhead: 2.0
+      });
+
+      let chunkIndex = 0;
+      let totalSamples = 0;
+
+      // Listen for playback position updates from client
+      const positionHandler = (data) => {
+        try {
+          const message = JSON.parse(data);
+          if (message.type === 'playback-position') {
+            renderState.clientPosition = message.position;
           }
-        },
-
-        // Controlled resume: only resume if we need to stay ahead of client
-        shouldResume: (renderedDuration) => {
-          const bufferRemaining = renderedDuration - renderState.clientPosition;
-          const needMore = bufferRemaining < renderState.bufferAhead;
-          return needMore;
-        },
-
-        // Notify when initial buffer is complete
-        onBufferFull: (renderedDuration) => {
-          console.log(`  ⏸️  Initial buffer complete (${renderedDuration.toFixed(2)}s), waiting for client playback...`);
+        } catch (e) {
+          // Ignore parse errors
         }
-      }
-    );
+      };
+      ws.on('message', positionHandler);
 
-    // Wait for render to complete
-    await renderPromise;
+      console.log(`🎬 Starting streaming render for ${genomeId}...`);
 
-    // Clean up position handler
-    ws.off('message', positionHandler);
+      const renderPromise = renderer.render(
+        genomeAndMeta,
+        duration,
+        offlineContext,
+        {
+          onChunk: (chunkData) => {
+            chunkIndex++;
+            totalSamples += chunkData.length;
+            const timestamp = totalSamples / ACTUAL_SAMPLE_RATE;
+            renderState.renderedDuration = timestamp;
 
-    console.log(`✅ Render complete: ${chunkIndex} chunks, ${duration}s`);
-    console.log();
+            ws.send(JSON.stringify({
+              type: 'chunk',
+              requestId,
+              index: chunkIndex,
+              data: Array.from(chunkData),
+              timestamp,
+              sampleRate: ACTUAL_SAMPLE_RATE
+            }));
 
-    // Send completion message BEFORE cleanup
-    ws.send(JSON.stringify({
-      type: 'complete',
-      requestId,  // Echo back request ID
-      totalChunks: chunkIndex,
-      totalSamples,
-      duration,
-      sampleRate: ACTUAL_SAMPLE_RATE
-    }));
+            if (chunkIndex % 10 === 0 || timestamp >= duration) {
+              console.log(`  📤 Sent chunk ${chunkIndex} (${timestamp.toFixed(2)}s / ${duration}s, client @ ${renderState.clientPosition.toFixed(2)}s)`);
+            }
+          },
+
+          shouldResume: (renderedDuration) => {
+            const bufferRemaining = renderedDuration - renderState.clientPosition;
+            return bufferRemaining < renderState.bufferAhead;
+          },
+
+          onBufferFull: (renderedDuration) => {
+            console.log(`  ⏸️  Initial buffer complete (${renderedDuration.toFixed(2)}s), waiting for client playback...`);
+          }
+        }
+      );
+
+      await renderPromise;
+      ws.off('message', positionHandler);
+
+      console.log(`✅ Render complete: ${chunkIndex} chunks, ${duration}s`);
+      console.log();
+
+      ws.send(JSON.stringify({
+        type: 'complete',
+        requestId,
+        totalChunks: chunkIndex,
+        totalSamples,
+        duration,
+        sampleRate: ACTUAL_SAMPLE_RATE
+      }));
+    }
 
     // Note: sharedAudioContext is reused, only offlineContext needs cleanup
     // The offlineContext is automatically cleaned up by garbage collection

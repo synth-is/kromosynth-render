@@ -78,20 +78,6 @@ export async function generateAudioDataFromGenomeString(
 		actualGenome = genome;
 	}
 
-	// Parse asNEATPatch if it's a string (can be double-encoded)
-	if (actualGenome.asNEATPatch && typeof actualGenome.asNEATPatch === 'string') {
-		try {
-			actualGenome.asNEATPatch = JSON.parse(actualGenome.asNEATPatch);
-		} catch (e) {
-			console.warn('Failed to parse asNEATPatch string:', e);
-		}
-	}
-
-	// Ensure asNEATPatch has toJSON method if it's an object
-	if (actualGenome.asNEATPatch && typeof actualGenome.asNEATPatch === 'object' && !actualGenome.asNEATPatch.toJSON) {
-		actualGenome.asNEATPatch.toJSON = function() { return this; };
-	}
-
 	const genomeAndMeta = {
 		genome: actualGenome,
 		duration: _duration,
@@ -101,29 +87,12 @@ export async function generateAudioDataFromGenomeString(
 		useOvertoneInharmonicityFactors
 	};
 
-	// Genome fingerprint for render parity diagnosis
-	const crypto = await import('crypto');
-	const patchStr = JSON.stringify(actualGenome.asNEATPatch);
-	const waveStr = JSON.stringify(actualGenome.waveNetwork);
-	const patchHash = crypto.createHash('md5').update(patchStr).digest('hex').slice(0, 12);
-	const waveHash = crypto.createHash('md5').update(waveStr).digest('hex').slice(0, 12);
-	console.log('🔬 RENDER FINGERPRINT (rendering-common):', {
-		patchHash, waveHash,
-		patchLen: patchStr.length, waveLen: waveStr.length,
-		nodeCount: actualGenome.asNEATPatch?.nodes?.length,
-		connCount: actualGenome.asNEATPatch?.connections?.length,
-		firstNodeType: typeof actualGenome.asNEATPatch?.nodes?.[0],
-		duration: _duration, noteDelta: _noteDelta, velocity: _velocity,
-		sampleRate, useGPU, antiAliasing, useOvertoneInharmonicityFactors,
-		asDataArray
-	});
-
 	// const audioContext = await getAudioContext();
 	const audioBuffer = await getAudioBufferFromGenomeAndMeta(
 		genomeAndMeta,
 		duration, noteDelta, velocity, reverse,
 		asDataArray,
-		undefined, // getNewOfflineAudioContext( duration, sampleRate ),
+		getNewOfflineAudioContext( duration, sampleRate ),
 		getAudioContext(sampleRate),
 		useOvertoneInharmonicityFactors,
 		useGPU,

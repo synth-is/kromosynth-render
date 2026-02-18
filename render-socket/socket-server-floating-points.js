@@ -209,7 +209,7 @@ wss.on("connection", async function connection(ws) {
     let buffer;
     if (audioBuffer) {
       const audioData = audioBuffer;
-      buffer = Buffer.from(audioData.buffer);
+      buffer = Buffer.from(audioData.buffer, audioData.byteOffset, audioData.byteLength);
     } else {
       buffer = null;
     }
