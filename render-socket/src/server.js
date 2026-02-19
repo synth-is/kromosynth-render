@@ -70,6 +70,10 @@ async function loadGenome(genomeIdOrData) {
   return genomeData.genome || genomeData;
 }
 
+// Set of resolver functions for pending streaming renders — triggered by the AudioWorklet
+// cleanup uncaughtException to unblock awaits when startRendering() hangs after the error.
+const activeWorkletDoneResolvers = new Set();
+
 // Handle render request
 async function handleRenderRequest(ws, message) {
   const { genomeId, genome, duration, noteDelta = 0, velocity = 1.0, useGPU = false, requestId, batch = false, batchChannels = 8, controlledResume = true } = message;
@@ -283,6 +287,14 @@ async function handleRenderRequest(ws, message) {
 
       console.log(`🎬 Starting streaming render for ${genomeId}...`);
 
+      // The AudioWorklet cleanup error ("expect Object, got: Undefined") escapes the promise
+      // chain as a truly uncaught exception caught by process.on('uncaughtException').
+      // When it fires, startRendering() is done and all chunks are captured — we just need
+      // to unblock the await. Expose a resolver so the uncaughtException handler can do that.
+      let workletDoneResolve;
+      const workletDonePromise = new Promise(resolve => { workletDoneResolve = resolve; });
+      activeWorkletDoneResolvers.add(workletDoneResolve);
+
       const startTime = performance.now();
       const renderPromise = renderer.render(
         genomeAndMeta,
@@ -326,7 +338,10 @@ async function handleRenderRequest(ws, message) {
         }
       );
 
-      await renderPromise;
+      // Race: renderPromise resolves normally, OR workletDonePromise resolves when the
+      // AudioWorklet cleanup uncaughtException fires (meaning rendering is complete).
+      await Promise.race([renderPromise, workletDonePromise]);
+      activeWorkletDoneResolvers.delete(workletDoneResolve);
       if (controlledResume) ws.off('message', positionHandler);
 
       const renderTime = (performance.now() - startTime) / 1000;
@@ -414,11 +429,15 @@ wss.on('connection', (ws, req) => {
   }));
 });
 
-// Handle uncaught AudioWorklet errors (these are expected at end of render)
+// Handle uncaught AudioWorklet errors (these are expected at end of render).
+// When this fires, startRendering() is complete and all chunks are captured —
+// resolve all pending streaming renders so their awaits unblock.
 process.on('uncaughtException', (error) => {
   if (error.message && error.message.includes('expect Object, got: Undefined')) {
     console.log('  ℹ️  AudioWorklet cleanup error caught (expected, continuing)');
-    // Don't exit - this is normal
+    // Unblock any pending streaming render awaits
+    for (const resolve of activeWorkletDoneResolvers) resolve();
+    activeWorkletDoneResolvers.clear();
   } else {
     console.error('❌ Uncaught exception:', error);
     process.exit(1);
