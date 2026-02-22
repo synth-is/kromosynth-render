@@ -82,7 +82,27 @@ async function handleRenderRequest(ws, message) {
 
   try {
     // Use provided genome data if available, otherwise load from database
-    const genomeData = genome || await loadGenome(genomeId);
+    let genomeData = genome || await loadGenome(genomeId);
+
+    // Unwrap nested genome structures — genomes may arrive wrapped as:
+    //   { genome: { asNEATPatch: ... } }  or even  { data: { genome: { ... } } }
+    // Keep unwrapping until we find asNEATPatch at the top level
+    for (let depth = 0; depth < 3 && genomeData && !genomeData.asNEATPatch; depth++) {
+      if (genomeData.genome && typeof genomeData.genome === 'object') {
+        genomeData = genomeData.genome;
+      } else if (genomeData.data && typeof genomeData.data === 'object') {
+        genomeData = genomeData.data;
+      } else if (typeof genomeData.genome === 'string') {
+        try { genomeData = JSON.parse(genomeData.genome); } catch { break; }
+      } else {
+        break;
+      }
+    }
+
+    if (!genomeData || !genomeData.asNEATPatch) {
+      const keys = genomeData ? Object.keys(genomeData).slice(0, 10) : [];
+      throw new Error(`Genome data missing asNEATPatch. Top-level keys: [${keys.join(', ')}]`);
+    }
 
     // Ensure asNEATPatch is an object (parse recursively if string)
     // Handle cases where it might be double-encoded
@@ -125,8 +145,8 @@ async function handleRenderRequest(ws, message) {
 
     // Genome fingerprint for render parity diagnosis
     const crypto = await import('crypto');
-    const patchStr = JSON.stringify(genomeData.asNEATPatch);
-    const waveStr = JSON.stringify(genomeData.waveNetwork);
+    const patchStr = JSON.stringify(genomeData.asNEATPatch) || 'undefined';
+    const waveStr = JSON.stringify(genomeData.waveNetwork) || 'undefined';
     const patchHash = crypto.createHash('md5').update(patchStr).digest('hex').slice(0, 12);
     const waveHash = crypto.createHash('md5').update(waveStr).digest('hex').slice(0, 12);
     console.log('🔬 RENDER FINGERPRINT (streaming-server):', {
@@ -381,6 +401,7 @@ async function handleRenderRequest(ws, message) {
     console.error(`❌ Render error:`, error);
     ws.send(JSON.stringify({
       type: 'error',
+      requestId,
       message: error.message
     }));
   }
