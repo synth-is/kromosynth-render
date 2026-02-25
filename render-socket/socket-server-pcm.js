@@ -65,6 +65,7 @@ server.listen(PORT, '0.0.0.0', () => {
 async function generateAudioData( audioRenderRequest ) {
   const {
     genomeStringUrl,
+    genomeString: inlineGenomeString, // Accept genome data directly (from AudioRenderingService)
     duration,
     noteDelta,
     velocity,
@@ -76,31 +77,36 @@ async function generateAudioData( audioRenderRequest ) {
     frequencyUpdatesApplyToAllPathcNetworkOutputs,
     sampleRate
   } = audioRenderRequest;
-  // ... Generate or fetch the audio data ...
-  let genomeString = await downloadString(genomeStringUrl);
+
+  let genomeString;
+
+  if (inlineGenomeString) {
+    // Genome data provided directly (string or object)
+    genomeString = typeof inlineGenomeString === 'string'
+      ? inlineGenomeString
+      : JSON.stringify(inlineGenomeString);
+    console.log('Using inline genome string, length:', genomeString.length);
+  } else if (genomeStringUrl) {
+    // Fetch genome from URL
+    genomeString = await downloadString(genomeStringUrl);
+    console.log('genomeStringUrl:', genomeStringUrl);
+    // Check if the genomeStringUrl points to a .gz file and decompress if necessary
+    if (genomeStringUrl.endsWith('.gz')) {
+      genomeString = await decompressString(genomeString);
+    } else if (Buffer.isBuffer(genomeString)) {
+      genomeString = genomeString.toString('utf-8');
+    }
+  } else {
+    throw new Error('Either genomeStringUrl or genomeString must be provided');
+  }
 
   console.log('Request parameters:', {
-    genomeStringUrl,
-    duration,
-    noteDelta,
-    velocity,
-    reverse,
-    useOvertoneInharmonicityFactors,
-    overrideGenomeDurationNoteDeltaAndVelocity,
-    useGPU,
-    antiAliasing,
-    frequencyUpdatesApplyToAllPathcNetworkOutputs,
-    sampleRate
+    duration, noteDelta, velocity, reverse,
+    useOvertoneInharmonicityFactors, useGPU, antiAliasing,
+    frequencyUpdatesApplyToAllPathcNetworkOutputs, sampleRate,
+    genomeSource: inlineGenomeString ? 'inline' : genomeStringUrl
   });
-  console.log('genomeStringUrl:', genomeStringUrl);
-  // Check if the genomeStringUrl points to a .gz file and decompress if necessary
-  if (genomeStringUrl.endsWith('.gz')) {
-    genomeString = await decompressString(genomeString);
-  } else if (Buffer.isBuffer(genomeString)) {
-    // If it's a buffer but not compressed, convert to string
-    genomeString = genomeString.toString('utf-8');
-  }
-  console.log('genomeString:', typeof genomeString === 'string' ? genomeString.substring(0, 200) + '...' : genomeString);
+
   return generateAudioDataFromGenomeString(
     genomeString,
     duration,
@@ -121,20 +127,17 @@ function convertToPCM(audioBuffer) {
   console.log('numChannels:', numChannels);
   const numSamples = audioBuffer.length;
   console.log('numSamples:', numSamples);
-  const pcmData = new Int16Array(numChannels * numSamples * 2);
+  // Int16Array: one element per sample per channel (each element IS a 16-bit value)
+  const pcmData = new Int16Array(numChannels * numSamples);
   console.log('pcmData.length:', pcmData.length);
 
   for (let channel = 0; channel < numChannels; channel++) {
     const channelData = audioBuffer.getChannelData(channel);
 
-    // log('channelData:', channelData);
-
     for (let sample = 0; sample < numSamples; sample++) {
-      const pcmSample = Math.max(-1, Math.min(1, channelData[sample])) * 0x7FFF; // Convert to 16-bit PCM
-
-      const index = (sample * numChannels + channel) * 2; // Multiply by 2 for 16-bit PCM
-      pcmData[index] = pcmSample;
-      pcmData[index + 1] = pcmSample >> 8; // Shift the high byte to the second position
+      const pcmSample = Math.round(Math.max(-1, Math.min(1, channelData[sample])) * 0x7FFF);
+      // Interleaved layout: [ch0_s0, ch1_s0, ch0_s1, ch1_s1, ...]
+      pcmData[sample * numChannels + channel] = pcmSample;
     }
   }
 
