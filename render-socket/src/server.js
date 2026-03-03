@@ -13,6 +13,7 @@ import { promisify } from 'util';
 // Import from kromosynth's node_modules to ensure compatibility
 import NodeWebAudioAPI from '../../../kromosynth/node_modules/node-web-audio-api/index.mjs';
 const { OfflineAudioContext, AudioContext } = NodeWebAudioAPI;
+import { ensureBufferStartsAndEndsAtZero } from '../../../kromosynth/util/audio-buffer.js';
 
 const gunzip = promisify(zlib.gunzip);
 
@@ -234,6 +235,9 @@ async function handleRenderRequest(ws, message) {
         for (let i = 0; i < summed.length; i++) summed[i] /= peak;
       }
 
+      // 6. Ensure audio starts and ends at zero to avoid clicks
+      ensureBufferStartsAndEndsAtZero(summed);
+
       const renderTime = (performance.now() - startTime) / 1000;
 
       console.log(`✅ Batch render complete: ${renderTime.toFixed(2)}s for ${duration}s audio (${(duration / renderTime).toFixed(1)}× real-time), ${chCount}ch summed to mono`);
@@ -387,6 +391,9 @@ async function handleRenderRequest(ws, message) {
         let peak = 0;
         for (let i = 0; i < combined.length; i++) { const a = Math.abs(combined[i]); if (a > peak) peak = a; }
         if (peak > 0) for (let i = 0; i < combined.length; i++) combined[i] /= peak;
+
+        // Ensure audio starts and ends at zero to avoid clicks (matches batch mode)
+        ensureBufferStartsAndEndsAtZero(combined);
 
         ws.send(JSON.stringify({ type: 'batch-result', requestId, totalSamples, duration, sampleRate: ACTUAL_SAMPLE_RATE }));
         ws.send(Buffer.from(combined.buffer, combined.byteOffset, combined.byteLength));
