@@ -1,1 +1,3 @@
 render-socket/node_modules
+render-socket/comparison-wavs/
+render-socket/*.wav
