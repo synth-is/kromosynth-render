@@ -18,18 +18,16 @@
  *        CPPNOutputProcessor — functionally equivalent)
  *     → SAME DSP graph (streaming mode) — identical to browser
  *     → SAME WavetableMixProcessor AudioWorklet for crossfade
- *     → SAME DynamicsCompressor (threshold=0dB) as transparent peak limiter
+ *     → (optional) DynamicsCompressor (threshold=0dB) as transparent peak limiter
  *     → OfflineAudioContext renders at full machine speed
  *     → Peak normalisation to fill WAV range [−1, 1]
  *
  * OUTPUT CHAIN PARITY:
- *   Both paths use the same DynamicsCompressor (threshold=0dB, ratio=20:1)
- *   as a transparent peak limiter.  At 0dB threshold it only catches extreme
- *   spikes above 0dBFS — the signal below that passes through untouched.
- *   Without it, genomes with extreme peaks cause peak normalisation to make
- *   the entire WAV very quiet (everything divided by one huge spike).
- *   Browser follows with gain(0.25) for speaker safety; WAV follows with
- *   peak normalisation to fill the full [-1,1] range.
+ *   Browser always uses a DynamicsCompressor (threshold=0dB) for real-time
+ *   safety, followed by gain(0.25) for speaker safety.
+ *   WAV uses peak normalisation by default (no compressor).  Pass
+ *   { useCompressor: true } to enable the same 0dB limiter — useful when
+ *   extreme peaks make the normalised WAV too quiet.
  *
  * WHY single CPPN call (not chunked):
  *   Chunked calls to startMemberOutputsRendering produce different values for
@@ -60,7 +58,7 @@ const KROMOSYNTH_PATH = '../../../kromosynth';
  * @param {number} velocity — velocity [0,1]
  * @param {number} sampleRate — sample rate (e.g. 48000)
  * @param {boolean} useGPU — whether to use GPU for CPPN computation
- * @param {Object} options — { onProgress }
+ * @param {Object} options — { onProgress, useCompressor }
  * @returns {Promise<{ samples: Float32Array, totalSamples: number, renderTimeMs: number }>}
  */
 export async function renderWithWorkletOffline(
@@ -68,7 +66,7 @@ export async function renderWithWorkletOffline(
   useGPU = false,
   options = {}
 ) {
-  const { onProgress } = options;
+  const { onProgress, useCompressor = false } = options;
   const startTime = performance.now();
 
   console.log(`[WORKLET-OFFLINE] Starting: duration=${duration}s, sampleRate=${sampleRate}`);
@@ -249,52 +247,53 @@ export async function renderWithWorkletOffline(
     wavetableMixInfo, rawSamplesPerChannel, virtualAudioGraph, offlineContext, totalSamples, duration
   );
 
-  // ── Step 6.7: Insert compressor to tame extreme peaks before normalisation ─
-  // Some genomes produce signals far above 0dBFS. Without peak-taming,
+  // ── Step 6.7: Optional compressor for peak-taming before normalisation ─────
+  // Some genomes produce signals far above 0dBFS.  Without peak-taming,
   // peak normalisation divides everything by the highest spike, making the
-  // sustained signal very quiet.  A transparent limiter (threshold=0dB)
-  // catches only those extreme peaks, preserving the natural dynamics
-  // while ensuring peak normalisation produces a healthy loudness level.
-  // Settings match BrowserLiveRenderer for parity.
-  const compressor = offlineContext.createDynamicsCompressor();
-  compressor.threshold.value = 0;    // absolute ceiling — transparent below 0dBFS
-  compressor.knee.value = 0;         // hard knee
-  compressor.ratio.value = 20;       // brickwall above threshold
-  compressor.attack.value = 0.001;   // fast attack
-  compressor.release.value = 0.01;   // fast release — no pumping
+  // sustained signal very quiet.  When enabled (useCompressor=true), a
+  // transparent limiter (threshold=0dB) catches only those extreme peaks.
+  // Default is OFF — raw dynamics preserved, peak normalisation only.
+  if (useCompressor) {
+    const compressor = offlineContext.createDynamicsCompressor();
+    compressor.threshold.value = 0;    // absolute ceiling — transparent below 0dBFS
+    compressor.knee.value = 0;         // hard knee
+    compressor.ratio.value = 20;       // brickwall above threshold
+    compressor.attack.value = 0.001;   // fast attack
+    compressor.release.value = 0.01;   // fast release — no pumping
 
-  compressor.connect(offlineContext.destination);
+    compressor.connect(offlineContext.destination);
 
-  // Reconnect DSP graph outputs: destination → compressor
-  for (const key in virtualAudioGraph.virtualNodes) {
-    const vnode = virtualAudioGraph.virtualNodes[key];
-    if (!vnode) continue;
-    const output = vnode.output;
-    if (output === 'output' || (Array.isArray(output) && output.includes('output'))) {
-      if (vnode.audioNode) {
-        try {
-          vnode.audioNode.disconnect(offlineContext.destination);
-          vnode.audioNode.connect(compressor);
-        } catch {}
-      }
-      if (vnode.virtualNodes) {
-        for (const childKey in vnode.virtualNodes) {
-          const child = vnode.virtualNodes[childKey];
-          const childOutput = child?.output;
-          if (childOutput === 'output' || (Array.isArray(childOutput) && childOutput.includes('output'))) {
-            if (child.audioNode) {
-              try {
-                child.audioNode.disconnect(offlineContext.destination);
-                child.audioNode.connect(compressor);
-              } catch {}
+    // Reconnect DSP graph outputs: destination → compressor
+    for (const key in virtualAudioGraph.virtualNodes) {
+      const vnode = virtualAudioGraph.virtualNodes[key];
+      if (!vnode) continue;
+      const output = vnode.output;
+      if (output === 'output' || (Array.isArray(output) && output.includes('output'))) {
+        if (vnode.audioNode) {
+          try {
+            vnode.audioNode.disconnect(offlineContext.destination);
+            vnode.audioNode.connect(compressor);
+          } catch {}
+        }
+        if (vnode.virtualNodes) {
+          for (const childKey in vnode.virtualNodes) {
+            const child = vnode.virtualNodes[childKey];
+            const childOutput = child?.output;
+            if (childOutput === 'output' || (Array.isArray(childOutput) && childOutput.includes('output'))) {
+              if (child.audioNode) {
+                try {
+                  child.audioNode.disconnect(offlineContext.destination);
+                  child.audioNode.connect(compressor);
+                } catch {}
+              }
             }
           }
         }
       }
     }
-  }
 
-  console.log(`[WORKLET-OFFLINE] Compressor inserted: threshold=0dB (transparent peak limiter)`);
+    console.log(`[WORKLET-OFFLINE] Compressor enabled: threshold=0dB (transparent peak limiter)`);
+  }
 
   // ── Step 7: Start all AudioBufferSourceNodes at time 0 ───────────
   // Must be done AFTER DSP graph is wired and BEFORE startRendering().
