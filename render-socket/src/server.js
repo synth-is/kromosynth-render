@@ -41,6 +41,8 @@ const PORT = process.env.PORT || 3000;
 const SAMPLE_RATE = 48000;
 const DB_PATH = process.env.DB_PATH || '/Users/bjornpjo/QD/evoruns/01JF0WEW4BTQSWWKGFR72JQ7J6_evoConf_singleMap_refSingleEmb_mfcc-sans0-statistics_AE_retrainIncr50_zScoreNSynthTrain_noveltySel/genomes.sqlite';
 
+const USE_COMPRESSOR = process.env.USE_COMPRESSOR === 'true' || process.env.USE_COMPRESSOR === '1';
+
 const KROMOSYNTH_PATH = '../../../kromosynth';
 
 console.log('🎵 Kromosynth Render Socket Server');
@@ -48,6 +50,7 @@ console.log('='.repeat(50));
 console.log(`Port: ${PORT}`);
 console.log(`Database: ${DB_PATH}`);
 console.log(`Sample Rate: ${SAMPLE_RATE}`);
+console.log(`Compressor: ${USE_COMPRESSOR ? 'ON (0dB peak limiter)' : 'OFF (peak normalize only)'}`);
 console.log('='.repeat(50));
 console.log();
 
@@ -135,7 +138,7 @@ async function renderWorkletOffline(ws, genomeData, duration, noteDelta, velocit
   const { renderWithWorkletOffline } = await import('./worklet-offline-renderer.js');
   const result = await renderWithWorkletOffline(
     genomeData, duration, noteDelta, velocity,
-    ACTUAL_SAMPLE_RATE, useGPU, { chunkDuration: 1.0 }
+    ACTUAL_SAMPLE_RATE, useGPU, { chunkDuration: 1.0, useCompressor: USE_COMPRESSOR }
   );
   const { samples, totalSamples, renderTimeMs, cppnTimeMs, offlineRenderTimeMs } = result;
   const renderTime = renderTimeMs / 1000;
