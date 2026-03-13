@@ -7,7 +7,7 @@
  *     CPPNOutputProcessor AudioWorklet generates CPPN samples in real-time
  *     → same DSP graph (streaming mode)
  *     → WavetableMixProcessor AudioWorklet for crossfade
- *     → DynamicsCompressor (threshold=-1dB, ratio=20:1) as safety limiter
+ *     → DynamicsCompressor as safety limiter (can't peak-normalize live)
  *     → masterGain(0.25) for safe playback volume
  *     → live AudioContext plays audio in real-time
  *
@@ -18,15 +18,16 @@
  *        CPPNOutputProcessor — functionally equivalent)
  *     → SAME DSP graph (streaming mode) — identical to browser
  *     → SAME WavetableMixProcessor AudioWorklet for crossfade
- *     → SAME DynamicsCompressor (threshold=-1dB, ratio=20:1)
  *     → OfflineAudioContext renders at full machine speed
- *     → Peak normalisation to fill WAV range [−1, 1]
+ *     → Peak normalisation to fill WAV range [−1, 1] (no compressor needed)
  *
  * OUTPUT CHAIN PARITY:
- *   Both paths use the same DynamicsCompressor (threshold=-1dB, ratio=20:1) as a
- *   transparent safety limiter — only catches peaks near clipping.  Browser follows
- *   with gain(0.25) for speaker safety; WAV follows with peak normalisation to fill
- *   the full [-1,1] range.
+ *   Browser uses a DynamicsCompressor for real-time safety (can't know peak in
+ *   advance), followed by gain(0.25) for speaker safety.
+ *   WAV uses NO compressor — peak normalisation after rendering fills [-1,1]
+ *   with the raw genome dynamics intact.  This sounds more natural than
+ *   compressed output; the compressor colors the sound unnecessarily for
+ *   offline rendering where we can normalise after the fact.
  *
  * WHY single CPPN call (not chunked):
  *   Chunked calls to startMemberOutputsRendering produce different values for
@@ -245,52 +246,6 @@ export async function renderWithWorkletOffline(
   const gainSources = applyWavetableMixCurves(
     wavetableMixInfo, rawSamplesPerChannel, virtualAudioGraph, offlineContext, totalSamples, duration
   );
-
-  // ── Step 6.7: Insert compressor for parity with browser preview ────
-  // BrowserLiveRenderer uses a DynamicsCompressor as a brickwall limiter to
-  // prevent clipping during real-time playback.  Without it, some genomes
-  // produce signals far above 0dB.  We apply the same compressor here so
-  // the WAV output has comparable dynamics and loudness to the browser.
-  // After rendering, peak normalisation fills the WAV range [-1, 1].
-  const compressor = offlineContext.createDynamicsCompressor();
-  compressor.threshold.value = -1;   // only catch peaks near clipping
-  compressor.knee.value = 0;         // hard knee — transparent below threshold
-  compressor.ratio.value = 20;       // brickwall above threshold
-  compressor.attack.value = 0.001;   // fast attack to catch transients
-  compressor.release.value = 0.01;   // fast release to avoid pumping/fade-out
-
-  compressor.connect(offlineContext.destination);
-
-  // Reconnect DSP graph outputs: destination → compressor
-  for (const key in virtualAudioGraph.virtualNodes) {
-    const vnode = virtualAudioGraph.virtualNodes[key];
-    if (!vnode) continue;
-    const output = vnode.output;
-    if (output === 'output' || (Array.isArray(output) && output.includes('output'))) {
-      if (vnode.audioNode) {
-        try {
-          vnode.audioNode.disconnect(offlineContext.destination);
-          vnode.audioNode.connect(compressor);
-        } catch {}
-      }
-      if (vnode.virtualNodes) {
-        for (const childKey in vnode.virtualNodes) {
-          const child = vnode.virtualNodes[childKey];
-          const childOutput = child?.output;
-          if (childOutput === 'output' || (Array.isArray(childOutput) && childOutput.includes('output'))) {
-            if (child.audioNode) {
-              try {
-                child.audioNode.disconnect(offlineContext.destination);
-                child.audioNode.connect(compressor);
-              } catch {}
-            }
-          }
-        }
-      }
-    }
-  }
-
-  console.log(`[WORKLET-OFFLINE] Compressor inserted: threshold=-1dB, ratio=20:1, knee=0 (transparent safety limiter)`);
 
   // ── Step 7: Start all AudioBufferSourceNodes at time 0 ───────────
   // Must be done AFTER DSP graph is wired and BEFORE startRendering().
