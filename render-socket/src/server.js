@@ -2,23 +2,36 @@
 /**
  * WebSocket Streaming Render Server
  *
- * Provides real-time audio rendering over WebSocket connections.
+ * Provides audio rendering over WebSocket connections using a single unified
+ * rendering path: worklet-offline (AudioBufferSourceNode CPPN signal feeding
+ * into the same DSP graph used by BrowserLiveRenderer client-side).
+ *
+ * The ONLY difference between the browser live path and this server path:
+ *   - Browser: live AudioContext, CPPNOutputProcessor AudioWorklet generates samples in real-time
+ *   - Server:  OfflineAudioContext renders at full machine speed, CPPN samples
+ *              pre-computed and delivered via AudioBufferSourceNode (postMessage
+ *              timing is unreliable in OfflineAudioContext, so direct buffer feed
+ *              is used instead — functionally equivalent).
  *
  * Rendering modes (selected per-request):
- *   batch=true (default)       → worklet-offline: AudioWorklet signal feeding,
- *                                correct delay/feedback, matches browser live path.
- *                                Pass legacyBatch=true to fall back to setValueCurveAtTime.
- *   batch=false, controlledResume=false → worklet-offline (WAV capture)
- *   batch=false, controlledResume=true  → StreamingRenderer (browser preview)
+ *   default (batch=true OR batch=false)  → renderWorkletOffline
+ *   legacyBatch=true                     → renderLegacyBatch (setValueCurveAtTime, rollback only)
+ *
+ * NOTE: The previous renderStreamingPreview / StreamingRenderer path has been
+ * removed. It was causing an unbounded memory leak (OfflineAudioContext + audio
+ * graph nodes per render, never cleaned up in node-web-audio-api). That path
+ * predates BrowserLiveRenderer and is no longer needed:
+ *   - Browser preview uses BrowserLiveRenderer (client-side, mode='client' default)
+ *   - QD pipeline uses batch=true
+ *   - All paths now use renderWorkletOffline
  */
 
 import { WebSocketServer } from 'ws';
 import Database from 'better-sqlite3';
 import zlib from 'zlib';
 import { promisify } from 'util';
-// Import from kromosynth's node_modules to ensure compatibility
 import NodeWebAudioAPI from '../../../kromosynth/node_modules/node-web-audio-api/index.mjs';
-const { OfflineAudioContext, AudioContext } = NodeWebAudioAPI;
+const { OfflineAudioContext } = NodeWebAudioAPI;
 import { ensureBufferStartsAndEndsAtZero } from '../../../kromosynth/util/audio-buffer.js';
 
 const gunzip = promisify(zlib.gunzip);
@@ -38,21 +51,18 @@ console.log(`Sample Rate: ${SAMPLE_RATE}`);
 console.log('='.repeat(50));
 console.log();
 
-// Server optimization: Warm audio context for CPPN GPU computation (reused across requests)
-console.log('⚡ Initializing warm audio context (for CPPN GPU reuse)...');
-const sharedAudioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
-const ACTUAL_SAMPLE_RATE = sharedAudioContext.sampleRate;
-console.log(`✓ Warm context ready (Sample Rate: ${ACTUAL_SAMPLE_RATE}Hz)`);
+// Determine the actual sample rate once from a throw-away offline context
+// (avoids keeping a live AudioContext resident — no longer needed now that
+// the StreamingRenderer GPU path has been removed).
+const _srProbe = new OfflineAudioContext({ numberOfChannels: 1, length: 1, sampleRate: SAMPLE_RATE });
+const ACTUAL_SAMPLE_RATE = _srProbe.sampleRate;
+console.log(`✓ Sample rate confirmed: ${ACTUAL_SAMPLE_RATE}Hz`);
 console.log();
 
 // WebSocket server
 const wss = new WebSocketServer({ port: PORT });
 console.log(`✓ WebSocket server listening on port ${PORT}`);
 console.log();
-
-// Set of resolver functions for pending streaming renders — triggered by the AudioWorklet
-// cleanup uncaughtException to unblock awaits when startRendering() hangs after the error.
-const activeWorkletDoneResolvers = new Set();
 
 // ─── Load genome from database or return provided genome data ────────────────
 async function loadGenome(genomeIdOrData) {
@@ -103,7 +113,7 @@ function unwrapGenome(raw, genomeId) {
   return genomeData;
 }
 
-// ─── Send batch-result protocol (shared by all offline render paths) ─────────
+// ─── Send batch-result protocol (shared by all render paths) ─────────────────
 function sendBatchResult(ws, samples, totalSamples, duration, requestId) {
   ws.send(JSON.stringify({
     type: 'batch-result', requestId, totalSamples, duration, sampleRate: ACTUAL_SAMPLE_RATE
@@ -114,9 +124,13 @@ function sendBatchResult(ws, samples, totalSamples, duration, requestId) {
   }));
 }
 
-// ─── Worklet-offline render (default for batch + WAV capture) ───────────────
-// Feeds CPPN outputs sample-by-sample through AudioWorklet into DSP graph
-// on OfflineAudioContext — matching browser live playback behavior exactly.
+// ─── Unified render path: worklet-offline ────────────────────────────────────
+// All requests (batch, preview, WAV capture) use this path.
+// Matches browser live path: same DSP graph in streaming mode, same AudioWorklet
+// signal connections, same WavetableMixProcessor crossfade logic.
+// Only difference from browser: OfflineAudioContext renders at full machine speed,
+// CPPN data delivered via AudioBufferSourceNode (not CPPNOutputProcessor) because
+// postMessage timing is unreliable in OfflineAudioContext.
 async function renderWorkletOffline(ws, genomeData, duration, noteDelta, velocity, useGPU, requestId) {
   const { renderWithWorkletOffline } = await import('./worklet-offline-renderer.js');
   const result = await renderWithWorkletOffline(
@@ -186,113 +200,29 @@ async function renderLegacyBatch(ws, genomeData, duration, noteDelta, velocity, 
   sendBatchResult(ws, summed, totalSamples, duration, requestId);
 }
 
-// ─── Browser preview streaming (controlledResume=true) ───────────────────────
-// Streams JSON audio chunks paced to client playback position via playback-position messages.
-async function renderStreamingPreview(ws, genomeData, duration, noteDelta, velocity, useGPU, requestId) {
-  const { StreamingRenderer } = await import(`${KROMOSYNTH_PATH}/util/streaming-renderer.js`);
-
-  const offlineContext = new OfflineAudioContext({
-    numberOfChannels: 1,
-    length: Math.round(ACTUAL_SAMPLE_RATE * duration),
-    sampleRate: ACTUAL_SAMPLE_RATE
-  });
-
-  const genomeAndMeta = { genome: genomeData, duration, noteDelta, velocity, reverse: false };
-  const renderState = { clientPosition: 0, renderedDuration: 0, bufferAhead: 2.0 };
-
-  const renderer = new StreamingRenderer(sharedAudioContext, ACTUAL_SAMPLE_RATE, {
-    useGPU, measureRTF: false,
-    defaultChunkDuration: 0.25, enableAdaptiveChunking: true,
-    controlledResume: true, initialBufferDuration: 2.0, bufferAhead: 2.0
-  });
-
-  let chunkIndex = 0;
-  let totalSamples = 0;
-
-  const positionHandler = (data) => {
-    try {
-      const msg = JSON.parse(data);
-      if (msg.type === 'playback-position') renderState.clientPosition = msg.position;
-    } catch { /* ignore */ }
-  };
-  ws.on('message', positionHandler);
-
-  let workletDoneResolve;
-  const workletDonePromise = new Promise(resolve => { workletDoneResolve = resolve; });
-  activeWorkletDoneResolvers.add(workletDoneResolve);
-
-  const startTime = performance.now();
-  const renderPromise = renderer.render(
-    genomeAndMeta, duration, offlineContext,
-    {
-      onChunk: (chunkData) => {
-        chunkIndex++;
-        totalSamples += chunkData.length;
-        const timestamp = totalSamples / ACTUAL_SAMPLE_RATE;
-        renderState.renderedDuration = timestamp;
-        ws.send(JSON.stringify({
-          type: 'chunk', requestId, index: chunkIndex,
-          data: Array.from(chunkData), timestamp, sampleRate: ACTUAL_SAMPLE_RATE
-        }));
-        if (chunkIndex % 10 === 0 || timestamp >= duration) {
-          console.log(`  📤 Sent chunk ${chunkIndex} (${timestamp.toFixed(2)}s / ${duration}s)`);
-        }
-      },
-      shouldResume: (renderedDuration) => {
-        return (renderedDuration - renderState.clientPosition) < renderState.bufferAhead;
-      },
-      onBufferFull: (renderedDuration) => {
-        console.log(`  ⏸️  Initial buffer complete (${renderedDuration.toFixed(2)}s), waiting for client...`);
-      }
-    }
-  );
-
-  await Promise.race([renderPromise, workletDonePromise]);
-  activeWorkletDoneResolvers.delete(workletDoneResolve);
-  ws.off('message', positionHandler);
-
-  const renderTime = (performance.now() - startTime) / 1000;
-  console.log(`✅ Streaming render complete: ${chunkIndex} chunks, ${duration}s (${(duration / renderTime).toFixed(1)}× real-time)`);
-  console.log();
-
-  ws.send(JSON.stringify({
-    type: 'complete', requestId, totalChunks: chunkIndex, totalSamples, duration, sampleRate: ACTUAL_SAMPLE_RATE
-  }));
-}
-
 // ─── Main render request handler ─────────────────────────────────────────────
 async function handleRenderRequest(ws, message) {
   const {
     genomeId, genome, duration,
     noteDelta = 0, velocity = 1.0, useGPU = false, requestId,
-    batch = false, batchChannels = 8, controlledResume = true, legacyBatch = false
+    batchChannels = 8, legacyBatch = false
+    // batch and controlledResume are accepted for backward compat but ignored —
+    // all requests now use the unified worklet-offline path.
   } = message;
 
-  const modeStr = batch
-    ? (legacyBatch ? 'legacy-batch' : 'worklet-batch')
-    : (controlledResume ? 'stream-preview' : 'stream-wav');
-  console.log(`📥 Render request: ${genomeId || 'inline genome'} (${duration}s, note=${noteDelta}, vel=${velocity}, ${modeStr}, gpu=${useGPU}) [${requestId || 'no-id'}]`);
+  console.log(`📥 Render request: ${genomeId || 'inline genome'} (${duration}s, note=${noteDelta}, vel=${velocity}, gpu=${useGPU}) [${requestId || 'no-id'}]`);
 
   try {
     const raw = genome || await loadGenome(genomeId);
     const genomeData = unwrapGenome(raw, genomeId);
 
-    if (batch) {
-      // ── Offline batch render ──────────────────────────────────────────────
-      if (legacyBatch) {
-        console.log(`⚡ Using legacy batch (setValueCurveAtTime, ${batchChannels}ch)`);
-        await renderLegacyBatch(ws, genomeData, duration, noteDelta, velocity, useGPU, requestId, batchChannels);
-      } else {
-        console.log(`⚡ Using worklet-offline (AudioWorklet signal feeding)`);
-        await renderWorkletOffline(ws, genomeData, duration, noteDelta, velocity, useGPU, requestId);
-      }
-    } else if (!controlledResume) {
-      // ── WAV capture: full-speed offline render ────────────────────────────
-      console.log(`⚡ WAV capture mode → worklet-offline`);
-      await renderWorkletOffline(ws, genomeData, duration, noteDelta, velocity, useGPU, requestId);
+    if (legacyBatch) {
+      console.log(`⚡ Using legacy batch (setValueCurveAtTime, ${batchChannels}ch)`);
+      await renderLegacyBatch(ws, genomeData, duration, noteDelta, velocity, useGPU, requestId, batchChannels);
     } else {
-      // ── Browser preview: streaming with playback pacing ───────────────────
-      await renderStreamingPreview(ws, genomeData, duration, noteDelta, velocity, useGPU, requestId);
+      // Unified path: worklet-offline for everything
+      // (batch=true, batch=false, controlledResume=true/false — all the same server-side)
+      await renderWorkletOffline(ws, genomeData, duration, noteDelta, velocity, useGPU, requestId);
     }
 
   } catch (error) {
@@ -312,7 +242,8 @@ wss.on('connection', (ws, req) => {
       if (message.type === 'render') {
         await handleRenderRequest(ws, message);
       } else if (message.type === 'playback-position') {
-        // Handled inside renderStreamingPreview via positionHandler — ignore here
+        // Previously used by StreamingRenderer pacing; now a no-op.
+        // Clients that still send this message are handled gracefully.
       } else {
         ws.send(JSON.stringify({ type: 'error', message: `Unknown message type: ${message.type}` }));
       }
@@ -330,20 +261,6 @@ wss.on('connection', (ws, req) => {
     message: 'Connected to Kromosynth Render Socket',
     sampleRate: ACTUAL_SAMPLE_RATE
   }));
-});
-
-// ─── Handle uncaught AudioWorklet cleanup errors ──────────────────────────────
-// The "expect Object, got: Undefined" error escapes startRendering() as a truly
-// uncaught exception. When it fires, rendering is complete — unblock all awaits.
-process.on('uncaughtException', (error) => {
-  if (error.message && error.message.includes('expect Object, got: Undefined')) {
-    console.log('  ℹ️  AudioWorklet cleanup error caught (expected, continuing)');
-    for (const resolve of activeWorkletDoneResolvers) resolve();
-    activeWorkletDoneResolvers.clear();
-  } else {
-    console.error('❌ Uncaught exception:', error);
-    process.exit(1);
-  }
 });
 
 process.on('SIGINT', () => {

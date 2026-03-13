@@ -1,128 +1,45 @@
 /**
- * WorkletOfflineRenderer — Unified offline rendering via AudioWorklet signal feeding
+ * WorkletOfflineRenderer — Unified offline rendering matching BrowserLiveRenderer
  *
- * Brings the BrowserLiveRenderer's AudioWorklet-based signal feeding approach
- * to offline/batch rendering. Instead of using setValueCurveAtTime (which
- * schedules curves before rendering), CPPN outputs flow sample-by-sample
- * through an AudioWorklet into the DSP graph — exactly as in the browser
- * live path.
+ * Both browser and server use the same AudioWorklet-based rendering path:
  *
- * WHY: The setValueCurveAtTime batch path fails for some genomes with delay
- * units because delay lines/feedback see the full pre-scheduled curve atomically.
- * The worklet approach feeds signals continuously, so delays fill naturally
- * just as they do during live playback.
+ *   BROWSER (BrowserLiveRenderer, live AudioContext):
+ *     CPPNOutputProcessor AudioWorklet generates CPPN samples in real-time
+ *     → same DSP graph (streaming mode)
+ *     → WavetableMixProcessor AudioWorklet for crossfade
+ *     → live AudioContext plays audio in real-time
  *
- * APPROACH:
- *   1. Pre-compute ALL CPPN chunks (sampleCountToActivate/sampleOffset)
- *   2. Create OfflineAudioContext with AudioWorklet (node-web-audio-api supports this)
- *   3. Register CPPNOutputProcessor worklet on the offline context
- *   4. Feed all chunks to the worklet before calling startRendering()
- *   5. Wire DSP graph in 'streaming' mode (uses wrapper GainNodes, no setValueCurveAtTime)
- *   6. offlineContext.startRendering() → deterministic output with correct delay behavior
- *   7. Sum channels, peak-normalise → Float32Array
+ *   SERVER (this file, OfflineAudioContext):
+ *     Pre-compute ALL CPPN samples in one call (single full-duration, not chunked)
+ *     → AudioBufferSourceNode delivers samples into the DSP graph (postMessage timing
+ *        is unreliable in OfflineAudioContext, so direct buffer feed replaces
+ *        CPPNOutputProcessor — functionally equivalent)
+ *     → SAME DSP graph (streaming mode) — identical to browser
+ *     → SAME WavetableMixProcessor AudioWorklet for crossfade
+ *     → OfflineAudioContext renders at full machine speed
  *
- * The result should be IDENTICAL to the browser live path, but rendered offline
- * at faster-than-realtime speed, supporting arbitrarily long durations.
+ * WHY single CPPN call (not chunked):
+ *   Chunked calls to startMemberOutputsRendering produce different values for
+ *   genomes with recurrent/stateful CPPN networks — each chunk resets internal
+ *   state. A single full-duration call ensures identical CPPN values to the
+ *   browser (which also computes a single continuous signal per play).
+ *
+ * WHY AudioBufferSourceNode instead of CPPNOutputProcessor:
+ *   In node-web-audio-api, postMessage to an AudioWorklet is not guaranteed to
+ *   be delivered before startRendering() processes the first frames. This caused
+ *   the worklet to output zeros initially, which after peak-normalisation appeared
+ *   as a "long fade-in". AudioBufferSourceNode loads data synchronously into the
+ *   audio context, guaranteeing availability from frame 0.
  */
 
 import NodeWebAudioAPI from '../../../kromosynth/node_modules/node-web-audio-api/index.mjs';
-const { OfflineAudioContext, AudioWorkletNode } = NodeWebAudioAPI;
+const { OfflineAudioContext } = NodeWebAudioAPI;
 import { ensureBufferStartsAndEndsAtZero } from '../../../kromosynth/util/audio-buffer.js';
 
 const KROMOSYNTH_PATH = '../../../kromosynth';
 
-// ─── AudioWorklet processor source ────────────────────────────────────
-// Same processor as BrowserLiveRenderer's CPPNOutputProcessor, adapted
-// for offline use: no gating needed since all chunks are loaded before
-// startRendering().
-const CPPN_OUTPUT_PROCESSOR_CODE = `
-class CPPNOutputProcessor extends AudioWorkletProcessor {
-  constructor(options) {
-    super();
-    const config = options.processorOptions || {};
-    this.numberOfChannels = config.numberOfOutputs || 18;
-    this.outputLayout = config.outputLayout || [this.numberOfChannels];
-    this.samplesPerChunk = config.samplesPerChunk || 48000;
-    this.totalDuration = config.duration || 4;
-    this.sampleRate = config.sampleRate || 48000;
-    this.totalSamples = Math.round(this.totalDuration * this.sampleRate);
-    this.cppnChunks = new Map();
-    this.currentChunkIndex = 0;
-    this.currentSampleInChunk = 0;
-    this.totalSamplesProcessed = 0;
-    // No gating in offline mode — all chunks loaded before startRendering()
-    this.isGated = false;
-    this.port.onmessage = (event) => this.handleMessage(event.data);
-    this.port.postMessage({ type: 'ready' });
-  }
-
-  handleMessage(message) {
-    if (message.type === 'cppn-chunk') {
-      this.cppnChunks.set(message.chunkIndex, message.outputs);
-      this.port.postMessage({
-        type: 'chunk-received', chunkIndex: message.chunkIndex,
-        bufferedChunks: this.cppnChunks.size
-      });
-    } else if (message.type === 'start') {
-      this.isGated = false;
-    } else if (message.type === 'stop') {
-      this.totalSamplesProcessed = this.totalSamples;
-    }
-  }
-
-  process(inputs, outputs, parameters) {
-    const blockSize = outputs[0]?.[0]?.length || 128;
-
-    if (this.isGated) {
-      for (let outIdx = 0; outIdx < outputs.length; outIdx++)
-        for (let ch = 0; ch < outputs[outIdx].length; ch++)
-          outputs[outIdx][ch].fill(0);
-      return true;
-    }
-
-    for (let i = 0; i < blockSize; i++) {
-      if (this.totalSamplesProcessed >= this.totalSamples) {
-        for (let outIdx = 0; outIdx < outputs.length; outIdx++)
-          for (let ch = 0; ch < outputs[outIdx].length; ch++)
-            outputs[outIdx][ch].fill(0, i);
-        return false;
-      }
-
-      const chunk = this.cppnChunks.get(this.currentChunkIndex);
-      if (!chunk) {
-        // Should not happen if all chunks pre-loaded, but handle gracefully
-        for (let outIdx = 0; outIdx < outputs.length; outIdx++)
-          for (let ch = 0; ch < outputs[outIdx].length; ch++)
-            outputs[outIdx][ch][i] = 0;
-      } else {
-        let globalCh = 0;
-        for (let outIdx = 0; outIdx < outputs.length; outIdx++) {
-          for (let ch = 0; ch < outputs[outIdx].length; ch++) {
-            const samples = chunk[globalCh];
-            outputs[outIdx][ch][i] = samples ? samples[this.currentSampleInChunk] : 0;
-            globalCh++;
-          }
-        }
-      }
-
-      this.totalSamplesProcessed++;
-      this.currentSampleInChunk++;
-
-      if (this.currentSampleInChunk >= this.samplesPerChunk) {
-        const old = this.currentChunkIndex - 1;
-        if (old >= 0) this.cppnChunks.delete(old);
-        this.currentChunkIndex++;
-        this.currentSampleInChunk = 0;
-      }
-    }
-    return true;
-  }
-}
-registerProcessor('cppn-output-processor', CPPNOutputProcessor);
-`;
-
 /**
- * Render a genome using the unified worklet-offline approach.
+ * Render a genome using the unified offline approach.
  *
  * @param {Object} genomeData — genome with .asNEATPatch and .waveNetwork
  * @param {number} duration — duration in seconds
@@ -130,7 +47,7 @@ registerProcessor('cppn-output-processor', CPPNOutputProcessor);
  * @param {number} velocity — velocity [0,1]
  * @param {number} sampleRate — sample rate (e.g. 48000)
  * @param {boolean} useGPU — whether to use GPU for CPPN computation
- * @param {Object} options — { chunkDuration, onProgress }
+ * @param {Object} options — { onProgress }
  * @returns {Promise<{ samples: Float32Array, totalSamples: number, renderTimeMs: number }>}
  */
 export async function renderWithWorkletOffline(
@@ -138,10 +55,10 @@ export async function renderWithWorkletOffline(
   useGPU = false,
   options = {}
 ) {
-  const { chunkDuration = 1.0, onProgress } = options;
+  const { onProgress } = options;
   const startTime = performance.now();
 
-  console.log(`[WORKLET-OFFLINE] Starting: duration=${duration}s, chunkDuration=${chunkDuration}s, sampleRate=${sampleRate}`);
+  console.log(`[WORKLET-OFFLINE] Starting: duration=${duration}s, sampleRate=${sampleRate}`);
 
   // ── Dynamic imports ──────────────────────────────────────────────
   const [
@@ -165,59 +82,32 @@ export async function renderWithWorkletOffline(
   const synthIsPatch = patchFromAsNEATnetwork(asNEATNetworkJSONString);
   synthIsPatch.duration = duration;
 
-  const samplesPerChunk = Math.round(sampleRate * chunkDuration);
   const totalSamples = Math.round(sampleRate * duration);
-  const numChunks = Math.ceil(totalSamples / samplesPerChunk);
 
-  console.log(`[WORKLET-OFFLINE] ${numChunks} chunks × ${chunkDuration}s, ${synthIsPatch.networkOutputs?.length || 0} network outputs`);
-  const cppnChunkStartTime = performance.now();
+  // ── Step 1: Single full-duration CPPN call ───────────────────────
+  // One call covering the entire duration ensures recurrent/stateful CPPN networks
+  // produce the same values as the browser live path (which also runs continuously).
+  // Chunked calls reset internal state between chunks, causing value divergence.
+  console.log(`[WORKLET-OFFLINE] Computing CPPN: ${totalSamples} samples (${duration}s), ${synthIsPatch.networkOutputs?.length || 0} network outputs`);
+  const cppnStartTime = performance.now();
 
-  const allChunks = []; // { memberOutputs, sampleCount, sampleOffset }
+  const result = await startMemberOutputsRendering(
+    genomeData.waveNetwork, synthIsPatch,
+    duration, noteDelta, sampleRate, velocity,
+    false,  // reverse
+    false,  // useOvertoneInharmonicityFactors
+    useGPU,
+    false,  // antiAliasing
+    false,  // frequencyUpdatesApplyToAllPatchNetworkOutputs
+    totalSamples,  // sampleCountToActivate — full duration in one call
+    0              // sampleOffset — start from frame 0
+  );
+  const { memberOutputs, patch: modifiedPatch } = result;
 
-  let modifiedPatch = null;
-  for (let i = 0; i < numChunks; i++) {
-    const offset = i * samplesPerChunk;
-    const count = Math.min(samplesPerChunk, totalSamples - offset);
+  const cppnTotalMs = performance.now() - cppnStartTime;
+  console.log(`[WORKLET-OFFLINE] CPPN computation: ${(cppnTotalMs / 1000).toFixed(2)}s`);
 
-    const tChunk = performance.now();
-    const result = await startMemberOutputsRendering(
-      genomeData.waveNetwork, synthIsPatch,
-      duration, noteDelta, sampleRate, velocity,
-      false,  // reverse
-      false,  // useOvertoneInharmonicityFactors
-      useGPU,
-      false,  // antiAliasing
-      false,  // frequencyUpdatesApplyToAllPathcNetworkOutputs
-      count,  // sampleCountToActivate
-      offset  // sampleOffset
-    );
-    const chunkMs = performance.now() - tChunk;
-
-    allChunks.push({
-      memberOutputs: result.memberOutputs,
-      sampleCount: count,
-      sampleOffset: offset,
-    });
-
-    if (!modifiedPatch) modifiedPatch = result.patch;
-
-    if (onProgress) {
-      onProgress({
-        phase: 'cppn',
-        chunk: i + 1,
-        numChunks,
-        chunkMs,
-        totalMs: performance.now() - cppnChunkStartTime,
-      });
-    }
-
-    if (i % 10 === 0 || i === numChunks - 1) {
-      console.log(`   chunk ${i + 1}/${numChunks} (${chunkMs.toFixed(0)}ms)`);
-    }
-  }
-
-  const cppnTotalMs = performance.now() - cppnChunkStartTime;
-  console.log(`[WORKLET-OFFLINE] CPPN pre-computation: ${(cppnTotalMs / 1000).toFixed(2)}s`);
+  if (onProgress) onProgress({ phase: 'cppn', chunk: 1, numChunks: 1, totalMs: cppnTotalMs });
 
   const patchForRender = modifiedPatch || synthIsPatch;
   patchForRender.duration = duration;
@@ -242,64 +132,65 @@ export async function renderWithWorkletOffline(
   const numberOfChannels = channelToMOKey.length;
 
   // ── Step 3: Create OfflineAudioContext ────────────────────────────
-  // Use 1 channel (mono) — the worklet + DSP graph mix internally.
   const offlineContext = new OfflineAudioContext({
     numberOfChannels: 1,
     length: totalSamples,
     sampleRate,
   });
 
-  // ── Step 4: Load AudioWorklet on OfflineAudioContext ──────────────
-  // node-web-audio-api supports Blob URLs
-  const blob = new Blob([CPPN_OUTPUT_PROCESSOR_CODE], { type: 'application/javascript' });
-  const url = URL.createObjectURL(blob);
-  await offlineContext.audioWorklet.addModule(url);
-  URL.revokeObjectURL(url);
-
-  // ── Step 5: Create CPPN output AudioWorkletNode ──────────────────
-  const MAX_CH = 32;
-  const numOutputs = Math.ceil(numberOfChannels / MAX_CH);
-  const outputLayout = [];
-  const outputChannelCount = [];
-  for (let o = 0; o < numOutputs; o++) {
-    const chans = Math.min(MAX_CH, numberOfChannels - o * MAX_CH);
-    outputLayout.push(chans);
-    outputChannelCount.push(chans);
-  }
-
-  console.log(`[WORKLET-OFFLINE] ${numberOfChannels} channels → ${numOutputs} worklet output(s)`);
-
-  const cppnOutputNode = new AudioWorkletNode(offlineContext, 'cppn-output-processor', {
-    numberOfInputs: 0,
-    numberOfOutputs: numOutputs,
-    outputChannelCount,
-    processorOptions: {
-      numberOfOutputs: numberOfChannels,
-      outputLayout,
-      samplesPerChunk,
-      duration,
-      sampleRate,
-    },
-  });
-
-  // Expected at end of offline render — processor returns false to signal completion
-  cppnOutputNode.onprocessorerror = () => {};
-
-  // ── Step 6: Create per-channel wrapper GainNodes ─────────────────
+  // ── Step 4: Build AudioBufferSourceNodes from CPPN data ──────────
+  //
+  // For each CPPN output channel, load samples into an AudioBuffer and connect:
+  //   AudioBufferSourceNode → GainNode (wrapper, gain=1.0)
+  //
+  // The GainNode is the "wrapper node" consumed by connectLiveSignals — identical
+  // interface to what BrowserLiveRenderer creates from CPPNOutputProcessor outputs.
+  // source.start(0) guarantees data from the very first rendered sample.
   const sequentialWrapperNodes = new Map();
-  let globalCh = 0;
-  for (let o = 0; o < numOutputs; o++) {
-    const chans = outputLayout[o];
-    const splitter = offlineContext.createChannelSplitter(chans);
-    cppnOutputNode.connect(splitter, o);
-    for (let ch = 0; ch < chans; ch++) {
-      const gain = offlineContext.createGain();
-      gain.gain.value = 1.0;
-      splitter.connect(gain, ch, 0);
-      sequentialWrapperNodes.set(globalCh, gain);
-      globalCh++;
+  const rawSamplesPerChannel = new Map(); // raw CPPN samples per seqIndex — needed for wavetable mix curves
+  const sources = []; // collected for .start(0) after DSP graph is wired
+
+  for (let ch = 0; ch < numberOfChannels; ch++) {
+    const noiseType = channelNoiseType[ch];
+    const moKey = channelToMOKey[ch];
+    const allSamples = new Float32Array(totalSamples); // zero-initialised
+
+    if (noiseType) {
+      // White noise inline (same as BrowserLiveRenderer noise channels)
+      for (let i = 0; i < totalSamples; i++) {
+        allSamples[i] = Math.random() * 2 - 1;
+      }
+    } else {
+      const output = memberOutputs.get(moKey);
+      let samples;
+      if (output?.samples?.length > 0) {
+        samples = output.samples;
+      } else if (output instanceof Float32Array && output.length > 0) {
+        samples = output;
+      }
+      if (samples) {
+        allSamples.set(samples.subarray(0, Math.min(totalSamples, samples.length)), 0);
+      }
+      // Missing output: zeros remain
     }
+
+    rawSamplesPerChannel.set(ch, allSamples); // keep for wavetable mix gain curve computation
+
+    const audioBuffer = offlineContext.createBuffer(1, totalSamples, sampleRate);
+    audioBuffer.copyToChannel(allSamples, 0);
+
+    const source = offlineContext.createBufferSource();
+    source.buffer = audioBuffer;
+
+    const wrapperGain = offlineContext.createGain();
+    wrapperGain.gain.value = 1.0;
+    source.connect(wrapperGain);
+
+    sources.push(source);
+    sequentialWrapperNodes.set(ch, wrapperGain);
   }
+
+  console.log(`[WORKLET-OFFLINE] ${numberOfChannels} channels → ${numberOfChannels} AudioBufferSourceNodes`);
 
   // Collapsed mapping for Renderer.connectWrapperNodesToGraph
   const collapsedWrapperNodes = new Map();
@@ -308,71 +199,60 @@ export async function renderWithWorkletOffline(
     if (wrapperNode) collapsedWrapperNodes.set(networkOutputIndex, wrapperNode);
   }
 
-  // ── Step 7: Wire DSP graph in 'streaming' mode ───────────────────
+  // ── Step 5: Wire DSP graph in 'streaming' mode ───────────────────
   const renderer = new Renderer(sampleRate);
 
   // Prevent the Renderer's own connectWrapperNodesToGraph from running —
-  // it collapses duplicate networkOutput values. We connect ourselves below.
+  // it collapses duplicate networkOutput values. We connect ourselves via
+  // the 1:1 sequential mapping in connectLiveSignals below.
   renderer._wrapperNodesConnected = true;
 
-  const chunk0Outputs = allChunks[0].memberOutputs;
-
   const virtualAudioGraph = await renderer.wireUpAudioGraphAndConnectToAudioContextDestination(
-    chunk0Outputs,
+    memberOutputs,
     patchForRender,
     noteDelta,
     offlineContext,
-    samplesPerChunk,  // chunk-sized, NOT full duration — matches BrowserLiveRenderer
+    totalSamples,     // full duration — matches BrowserLiveRenderer full-render graph construction
     collapsedWrapperNodes,
     'streaming'       // mode — skips setValueCurveAtTime, uses wrapper node placeholders
   );
 
-  // ── Step 7b: Connect live signals (1:1 sequential mapping) ───────
-  // This replicates BrowserLiveRenderer._connectLiveSignals, adapted for
-  // the server environment.
-  await connectLiveSignals(
-    patchForRender, sequentialWrapperNodes, virtualAudioGraph, offlineContext, Renderer
+  // ── Step 6: Connect live signals (1:1 sequential mapping) ────────
+  // Mirrors BrowserLiveRenderer._connectLiveSignals:
+  //   - standard AudioParams: wrapperNode → audioNode.param (with range remapping)
+  //   - buffer (wavetable): wrapperNode → audioWave{N} passthrough
+  //   - mix (wavetable crossfade): collected into wavetableMixInfo — handled in step 6.5
+  const wavetableMixInfo = await connectLiveSignals(
+    patchForRender, sequentialWrapperNodes, virtualAudioGraph, offlineContext
   );
 
-  // ── Step 8: Feed ALL CPPN chunks to worklet ──────────────────────
-  for (let chunkIdx = 0; chunkIdx < allChunks.length; chunkIdx++) {
-    const { memberOutputs } = allChunks[chunkIdx];
-    sendChunkToWorklet(cppnOutputNode, memberOutputs, channelToMOKey, channelNoiseType, chunkIdx, sampleRate, samplesPerChunk);
+  // ── Step 6.5: Apply wavetable crossfade gain curves ──────────────
+  // In BrowserLiveRenderer the mix signal drives WavetableMixProcessor (AudioWorklet),
+  // which computes per-wave gains in real-time. In OfflineAudioContext, both AudioWorklet
+  // nodes AND setValueCurveAtTime have startup issues (gain=0 for the first several render
+  // quanta). Instead, we deliver the pre-computed gain values as audio-rate signals via
+  // AudioBufferSourceNode — the same approach used for CPPN data, guaranteed from frame 0.
+  const gainSources = applyWavetableMixCurves(
+    wavetableMixInfo, rawSamplesPerChannel, virtualAudioGraph, offlineContext, totalSamples, duration
+  );
+
+  // ── Step 7: Start all AudioBufferSourceNodes at time 0 ───────────
+  // Must be done AFTER DSP graph is wired and BEFORE startRendering().
+  // Includes both CPPN sources and wavetable gain sources.
+  for (const source of sources) {
+    source.start(0);
+  }
+  for (const gainSrc of gainSources) {
+    gainSrc.start(0);
   }
 
-  // Un-gate (already ungated by default, but be explicit)
-  cppnOutputNode.port.postMessage({ type: 'start' });
-
-  // Listen for worklet underruns (shouldn't happen with pre-loaded chunks)
-  cppnOutputNode.port.onmessage = (event) => {
-    if (event.data.type === 'underrun') console.warn(`[WORKLET-OFFLINE] underrun at chunk ${event.data.chunkIndex}`);
-  };
-
-  // ── Step 9: Render offline ───────────────────────────────────────
+  // ── Step 8: Render offline ───────────────────────────────────────
   const renderStart = performance.now();
-
-  let rawBuffer;
-  try {
-    rawBuffer = await offlineContext.startRendering();
-  } catch (error) {
-    // Handle the known AudioWorklet cleanup error
-    if (error.message && error.message.includes('expect Object, got: Undefined')) {
-      console.log('  ℹ️  AudioWorklet cleanup error (expected, continuing)');
-      // The render actually completed — rawBuffer should still be available
-      // but startRendering() threw. We need a workaround.
-      throw new Error(
-        'startRendering() threw AudioWorklet cleanup error. ' +
-        'The render may have completed but the buffer was lost. ' +
-        'This is a known node-web-audio-api issue.'
-      );
-    }
-    throw error;
-  }
-
+  const rawBuffer = await offlineContext.startRendering();
   const renderMs = performance.now() - renderStart;
   console.log(`[WORKLET-OFFLINE] Offline render: ${(renderMs / 1000).toFixed(2)}s for ${duration}s audio (${(duration / (renderMs / 1000)).toFixed(1)}x realtime)`);
 
-  // ── Step 10: Extract and normalise audio ─────────────────────────
+  // ── Step 9: Extract and normalise audio ─────────────────────────
   const chCount = rawBuffer.numberOfChannels;
   const outputLength = rawBuffer.length;
   const summed = new Float32Array(outputLength);
@@ -386,10 +266,10 @@ export async function renderWithWorkletOffline(
       else if (Math.abs(chData[i]) > 1e-8) totalNonZero++;
     }
   }
-  if (totalNaN > 0) console.warn(`[WORKLET-OFFLINE] ${totalNaN} NaN samples detected in raw buffer`);
+  if (totalNaN > 0) console.warn(`[WORKLET-OFFLINE] ${totalNaN} NaN samples in raw buffer`);
   if (totalNonZero === 0) console.warn(`[WORKLET-OFFLINE] Raw buffer is silent (0 non-zero samples)`);
 
-  // Peak-normalise (handle NaN and silence gracefully)
+  // Peak-normalise
   let peak = 0;
   for (let i = 0; i < summed.length; i++) {
     if (!isNaN(summed[i])) {
@@ -402,7 +282,6 @@ export async function renderWithWorkletOffline(
       summed[i] = isNaN(summed[i]) ? 0 : summed[i] / peak;
     }
   } else {
-    // All zeros or NaN — just zero out NaN values
     for (let i = 0; i < summed.length; i++) {
       if (isNaN(summed[i])) summed[i] = 0;
     }
@@ -424,72 +303,23 @@ export async function renderWithWorkletOffline(
 }
 
 
-// ─── Helper: Send a CPPN chunk to the AudioWorklet ─────────────────────
-function sendChunkToWorklet(cppnOutputNode, memberOutputs, channelToMOKey, channelNoiseType, chunkIdx, sampleRate, samplesPerChunk) {
-  // Build the outputs array indexed by sequential channel order.
-  //
-  // memberOutputs is a Map where each value is an object with a `.samples`
-  // property (Float32Array), NOT a raw Float32Array. This matches the format
-  // returned by startMemberOutputsRendering → network-activation.js.
-  const outputs = {};
-
-  // First: determine expected length from any valid output
-  let expectedLength = samplesPerChunk;
-  for (let ch = 0; ch < channelToMOKey.length; ch++) {
-    if (channelNoiseType[ch]) continue;
-    const output = memberOutputs.get(channelToMOKey[ch]);
-    if (output?.samples?.length > 0) { expectedLength = output.samples.length; break; }
-    // Also handle raw Float32Array (some code paths may return this directly)
-    if (output instanceof Float32Array && output.length > 0) { expectedLength = output.length; break; }
-  }
-
-  for (let ch = 0; ch < channelToMOKey.length; ch++) {
-    const noiseType = channelNoiseType[ch];
-    if (noiseType) {
-      // Generate noise directly (same approach as BrowserLiveRenderer)
-      const noiseBuf = new Float32Array(expectedLength);
-      for (let i = 0; i < expectedLength; i++) {
-        noiseBuf[i] = Math.random() * 2 - 1; // white noise
-      }
-      outputs[ch] = noiseBuf;
-    } else {
-      const moKey = channelToMOKey[ch];
-      const output = memberOutputs.get(moKey);
-      let samples;
-      if (output?.samples?.length > 0) {
-        // Standard format: { samples: Float32Array, ... }
-        samples = new Float32Array(output.samples);
-      } else if (output instanceof Float32Array && output.length > 0) {
-        // Raw Float32Array (some code paths)
-        samples = new Float32Array(output);
-      } else {
-        // Missing output — fill with zeros
-        samples = new Float32Array(expectedLength);
-      }
-      outputs[ch] = samples;
-    }
-  }
-
-  cppnOutputNode.port.postMessage({
-    type: 'cppn-chunk',
-    chunkIndex: chunkIdx,
-    outputs,
-  });
-}
-
-
-// ─── Helper: Connect live signals (ported from BrowserLiveRenderer) ─────
+// ─── Helper: Connect live signals ────────────────────────────────────────────
 /**
- * Connect wrapper GainNodes to the DSP graph's audio parameters.
- * This replaces the setValueCurveAtTime scheduling with live signal connections.
+ * Port of BrowserLiveRenderer._connectLiveSignals for the offline context.
  *
- * FULL PORT of BrowserLiveRenderer._connectLiveSignals, handling:
+ * Connects wrapper GainNodes (backed by AudioBufferSourceNodes) to the DSP graph
+ * audio parameters — matching the browser live path.
+ *
+ * Handles:
  *   - Standard AudioParam connections (gain, frequency, Q, etc.) with range remapping
  *   - Buffer connections (wavetable audio waves + standard passthrough gains)
  *   - Partial buffer connections (additive synthesis)
  *   - Gain envelope connections (additive partials)
- *   - Mix connections (wavetable crossfade) — simplified without WavetableMixProcessor
+ *   - Mix connections (wavetable crossfade) — info collected and returned; actual gain
+ *     curves are applied by applyWavetableMixCurves() via setValueCurveAtTime
  *   - Curve connections (skipped — static property)
+ *
+ * @returns {Map} wavetableMixInfo — keyed by audioGraphNodeKey, values: { seqIndex, numWaves, range }
  */
 async function connectLiveSignals(patch, sequentialWrapperNodes, virtualAudioGraph, audioContext) {
   let connectionsCount = 0;
@@ -514,7 +344,10 @@ async function connectLiveSignals(patch, sequentialWrapperNodes, virtualAudioGra
     }
   });
 
-  // Count audio waves per wavetable node upfront
+  // Collect mix info per wavetable node (for applyWavetableMixCurves after this loop).
+  const wavetableMixInfo = new Map();
+
+  // Count audio waves per wavetable node upfront (needed to size the gain curve arrays).
   const wavetableAudioWaveCounts = new Map();
   patch.networkOutputs.forEach((oneOutput) => {
     for (const audioGraphNodeKey in oneOutput.audioGraphNodes) {
@@ -563,10 +396,8 @@ async function connectLiveSignals(patch, sequentialWrapperNodes, virtualAudioGra
               offsetNode.connect(targetNode);
               offsetNode.start();
               extraNodes.push(scaleNode, offsetNode);
-              // Range-remapped: scale(half)+offset(mid) → audioGraphNodeKey
             } else {
               wrapperNode.connect(targetNode);
-              // Direct connection → audioGraphNodeKey
             }
             connectionsCount++;
           };
@@ -582,7 +413,6 @@ async function connectLiveSignals(patch, sequentialWrapperNodes, virtualAudioGra
                 connectWithRange(child.audioNode, `wt-buf.${childKey}`);
               }
             } else if (audioNode) {
-              // Standard node — only connect the LAST buffer (batch parity)
               if (audioNode.constructor?.name === 'GainNode') {
                 const lastIdx = lastStdBufferSeqIndex.get(audioGraphNodeKey);
                 if (lastIdx === seqIndex) {
@@ -621,23 +451,30 @@ async function connectLiveSignals(patch, sequentialWrapperNodes, virtualAudioGra
                 scaleNode.connect(child.audioNode.gain);
                 extraNodes.push(scaleNode);
                 connectionsCount++;
-                // Gain envelope: scale(half) → audioGraphNodeKey.childKey.gain (base=mid)
               }
             }
             return;
           }
 
           // ── Mix wave (wavetable crossfade control) ─────────────────
-          // In the browser, this uses a WavetableMixProcessor AudioWorklet.
-          // For the offline prototype, we skip the crossfade worklet and
-          // connect the mix signal directly to the first gain — this is a
-          // simplification that will need refinement for wavetable genomes.
+          // Collect info for applyWavetableMixCurves (called after this function).
+          // The gain curves are pre-computed from raw CPPN samples and applied via
+          // setValueCurveAtTime — avoids AudioWorklet startup latency in OfflineAudioContext.
           if (paramName === 'mix') {
-            // TODO: Port WavetableMixProcessor to offline context for full wavetable crossfade
+            if (isCustomNode) {
+              const numWaves = wavetableAudioWaveCounts.get(audioGraphNodeKey) || 0;
+              if (numWaves > 0) {
+                wavetableMixInfo.set(audioGraphNodeKey, {
+                  seqIndex,
+                  numWaves,
+                  range: connection.range || null
+                });
+              }
+            }
             return;
           }
 
-          // ── Curve (skip — static property set during graph construction)
+          // ── Curve (skip — static property set during graph construction) ──
           if (paramName === 'curve') return;
 
           // ── Standard AudioParam (gain, frequency, Q, etc.) ────────
@@ -652,12 +489,10 @@ async function connectLiveSignals(patch, sequentialWrapperNodes, virtualAudioGra
               scaleNode.connect(audioNode[paramName]);
               extraNodes.push(scaleNode);
               connectionsCount++;
-              // Param: scale(half) → audioGraphNodeKey.paramName (base=mid)
             } else {
               audioNode[paramName].value = 0;
               wrapperNode.connect(audioNode[paramName]);
               connectionsCount++;
-              // Param: raw → audioGraphNodeKey.paramName
             }
           }
         } catch (connErr) {
@@ -667,6 +502,98 @@ async function connectLiveSignals(patch, sequentialWrapperNodes, virtualAudioGra
     }
   });
 
-  console.log(`[WORKLET-OFFLINE] connected: ${connectionsCount} total`);
-  return extraNodes;
+  console.log(`[WORKLET-OFFLINE] connected: ${connectionsCount} total (mix curves applied separately)`);
+  return wavetableMixInfo;
+}
+
+
+// ─── Helper: Apply wavetable crossfade gain curves ────────────────────────────
+/**
+ * Pre-compute per-wave gain arrays from raw CPPN mix-signal samples and deliver
+ * them as audio-rate data via AudioBufferSourceNodes connected to each wavetable
+ * node's gainValueCurve{w}.gain AudioParam.
+ *
+ * WHY AudioBufferSourceNode instead of setValueCurveAtTime or AudioWorkletNode:
+ *   Both scheduling APIs (setValueCurveAtTime) and AudioWorkletNode have startup
+ *   issues in OfflineAudioContext — the gain is 0 for the first several render
+ *   quanta (≈841 samples), producing a leading-silence artefact after normalization.
+ *   AudioBufferSourceNode delivers data synchronously from frame 0, guaranteeing
+ *   correct gain values for every sample.
+ *
+ * Math is identical to WavetableMixProcessor: triangular band-splitting over [-1,1].
+ *
+ * @returns {AudioBufferSourceNode[]} gainSources — must be .start(0)'d before startRendering()
+ */
+function applyWavetableMixCurves(wavetableMixInfo, rawSamplesPerChannel, virtualAudioGraph, audioContext, totalSamples, duration) {
+  const gainSources = [];
+
+  for (const [nodeKey, info] of wavetableMixInfo.entries()) {
+    const { seqIndex, numWaves, range } = info;
+    const rawSamples = rawSamplesPerChannel.get(seqIndex);
+    if (!rawSamples) {
+      console.warn(`[WORKLET-OFFLINE] mix-xfade: no raw samples for seqIndex ${seqIndex} (${nodeKey})`);
+      continue;
+    }
+
+    const virtualNode = virtualAudioGraph.virtualNodes[nodeKey];
+    if (!virtualNode?.virtualNodes) continue;
+
+    // Band-splitting spans — identical to WavetableMixProcessor._computeSpans()
+    const fraction = 2 / numWaves;
+    const halfFraction = fraction / 2;
+    const spans = [];
+    for (let i = 0; i < numWaves; i++) {
+      const start = i * fraction - 1;
+      spans.push({
+        start:  start - (i ? halfFraction : 0),
+        middle: start + halfFraction,
+        end:    start + fraction + ((i + 1) < numWaves ? halfFraction : 0)
+      });
+    }
+
+    // Range remapping factors (connection.range maps CPPN [-1,1] → [min,max])
+    let rangeScale = 1.0, rangeOffset = 0.0;
+    if (range) {
+      const [min, max] = range;
+      rangeScale = (max - min) / 2;
+      rangeOffset = (min + max) / 2;
+    }
+
+    // Pre-compute per-wave gain arrays (same per-sample math as WavetableMixProcessor.process)
+    const gainCurves = Array.from({ length: numWaves }, () => new Float32Array(rawSamples.length));
+    for (let i = 0; i < rawSamples.length; i++) {
+      const sample = rawSamples[i] * rangeScale + rangeOffset;
+      for (let w = 0; w < numWaves; w++) {
+        const span = spans[w];
+        gainCurves[w][i] = (sample > span.start && sample < span.end)
+          ? Math.max(0, 1 - Math.abs(span.middle - sample) / fraction)
+          : 0;
+      }
+    }
+
+    // Deliver each gain curve via AudioBufferSourceNode → gainValueCurve{w}.gain
+    // AudioBufferSourceNode guarantees data from frame 0 (no scheduling startup latency).
+    for (let w = 0; w < numWaves; w++) {
+      const childKey = `gainValueCurve${w + 1}`;
+      const child = virtualNode.virtualNodes[childKey];
+      if (child?.audioNode?.gain) {
+        // Zero the intrinsic gain value — the AudioBufferSource provides the full gain.
+        // AudioParam audio-rate input is ADDED to the intrinsic value, so value=0 is correct.
+        child.audioNode.gain.cancelScheduledValues(0);
+        child.audioNode.gain.value = 0;
+
+        const gainBuffer = audioContext.createBuffer(1, rawSamples.length, audioContext.sampleRate);
+        gainBuffer.copyToChannel(gainCurves[w], 0);
+
+        const gainSource = audioContext.createBufferSource();
+        gainSource.buffer = gainBuffer;
+        gainSource.connect(child.audioNode.gain);
+        gainSources.push(gainSource);
+      }
+    }
+
+    console.log(`[WORKLET-OFFLINE] mix-xfade [${seqIndex}]: AudioBufferSrc(${numWaves}ch) → ${nodeKey}`);
+  }
+
+  return gainSources;
 }
