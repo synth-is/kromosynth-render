@@ -7,7 +7,7 @@
  *     CPPNOutputProcessor AudioWorklet generates CPPN samples in real-time
  *     → same DSP graph (streaming mode)
  *     → WavetableMixProcessor AudioWorklet for crossfade
- *     → DynamicsCompressor (threshold=-6dB, ratio=20:1) as brickwall limiter
+ *     → DynamicsCompressor (threshold=-1dB, ratio=20:1) as safety limiter
  *     → masterGain(0.25) for safe playback volume
  *     → live AudioContext plays audio in real-time
  *
@@ -18,15 +18,15 @@
  *        CPPNOutputProcessor — functionally equivalent)
  *     → SAME DSP graph (streaming mode) — identical to browser
  *     → SAME WavetableMixProcessor AudioWorklet for crossfade
- *     → SAME DynamicsCompressor (threshold=-6dB, ratio=20:1)
+ *     → SAME DynamicsCompressor (threshold=-1dB, ratio=20:1)
  *     → OfflineAudioContext renders at full machine speed
  *     → Peak normalisation to fill WAV range [−1, 1]
  *
  * OUTPUT CHAIN PARITY:
- *   Both paths use the same DynamicsCompressor (threshold=-6dB, ratio=20:1) to tame
- *   peaks from hot genomes.  Browser follows with gain(0.25) for speaker safety;
- *   WAV follows with peak normalisation to fill the full [-1,1] range.
- *   The compressor ensures comparable dynamics and loudness between preview and WAV.
+ *   Both paths use the same DynamicsCompressor (threshold=-1dB, ratio=20:1) as a
+ *   transparent safety limiter — only catches peaks near clipping.  Browser follows
+ *   with gain(0.25) for speaker safety; WAV follows with peak normalisation to fill
+ *   the full [-1,1] range.
  *
  * WHY single CPPN call (not chunked):
  *   Chunked calls to startMemberOutputsRendering produce different values for
@@ -253,11 +253,11 @@ export async function renderWithWorkletOffline(
   // the WAV output has comparable dynamics and loudness to the browser.
   // After rendering, peak normalisation fills the WAV range [-1, 1].
   const compressor = offlineContext.createDynamicsCompressor();
-  compressor.threshold.value = -6;   // same as browser
-  compressor.knee.value = 6;
-  compressor.ratio.value = 20;       // heavy limiting
-  compressor.attack.value = 0.003;
-  compressor.release.value = 0.05;
+  compressor.threshold.value = -1;   // only catch peaks near clipping
+  compressor.knee.value = 0;         // hard knee — transparent below threshold
+  compressor.ratio.value = 20;       // brickwall above threshold
+  compressor.attack.value = 0.001;   // fast attack to catch transients
+  compressor.release.value = 0.01;   // fast release to avoid pumping/fade-out
 
   compressor.connect(offlineContext.destination);
 
@@ -290,7 +290,7 @@ export async function renderWithWorkletOffline(
     }
   }
 
-  console.log(`[WORKLET-OFFLINE] Compressor inserted: threshold=-6dB, ratio=20:1 (matching browser)`);
+  console.log(`[WORKLET-OFFLINE] Compressor inserted: threshold=-1dB, ratio=20:1, knee=0 (transparent safety limiter)`);
 
   // ── Step 7: Start all AudioBufferSourceNodes at time 0 ───────────
   // Must be done AFTER DSP graph is wired and BEFORE startRendering().
