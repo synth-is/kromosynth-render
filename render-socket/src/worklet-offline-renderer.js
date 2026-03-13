@@ -7,6 +7,7 @@
  *     CPPNOutputProcessor AudioWorklet generates CPPN samples in real-time
  *     → same DSP graph (streaming mode)
  *     → WavetableMixProcessor AudioWorklet for crossfade
+ *     → masterGain(0.25) for safe playback volume (no compressor)
  *     → live AudioContext plays audio in real-time
  *
  *   SERVER (this file, OfflineAudioContext):
@@ -17,6 +18,13 @@
  *     → SAME DSP graph (streaming mode) — identical to browser
  *     → SAME WavetableMixProcessor AudioWorklet for crossfade
  *     → OfflineAudioContext renders at full machine speed
+ *     → Peak normalisation to fill WAV range [−1, 1]
+ *
+ * OUTPUT CHAIN PARITY:
+ *   Neither path uses a compressor/limiter — the raw genome sound is preserved.
+ *   Browser uses a fixed gain (0.25) for speaker safety; WAV uses peak normalisation
+ *   to fill the full dynamic range.  Users hear the true genome output and can add
+ *   their own compression in a DAW if desired.
  *
  * WHY single CPPN call (not chunked):
  *   Chunked calls to startMemberOutputsRendering produce different values for

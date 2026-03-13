@@ -5,9 +5,10 @@
  * Usage (random genomes):
  *   node --experimental-vm-modules src/test-worklet-batch.js [count] [duration]
  *
- * Usage (specific genome IDs):
+ * Usage (specific genome IDs or URLs):
  *   node --experimental-vm-modules src/test-worklet-batch.js --ids BRED_foo 01KBNTRZ...
  *   node --experimental-vm-modules src/test-worklet-batch.js --ids --duration 8 BRED_foo 01KBNTRZ...
+ *   node --experimental-vm-modules src/test-worklet-batch.js --ids http://host:3004/api/exploration/genome/ID?format=raw
  *
  * Environment:
  *   DB_PATH — path to genome database (auto-detects schema: recommend vs evorun)
@@ -147,33 +148,94 @@ async function loadRandomGenomes(count) {
   return genomes;
 }
 
-// ─── Load specific genomes by ID ──────────────────────────────────────
+// ─── Load a genome from a URL ─────────────────────────────────────────
+async function loadGenomeFromUrl(url) {
+  console.log(`  🌐 Fetching: ${url}`);
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+  let genomeData = await response.json();
+
+  // Unwrap nested genome structures (same logic as parseGenomeRow)
+  for (let depth = 0; depth < 3 && genomeData && !genomeData.asNEATPatch; depth++) {
+    if (genomeData.genome && typeof genomeData.genome === 'object') {
+      genomeData = genomeData.genome;
+    } else if (genomeData.data && typeof genomeData.data === 'object') {
+      genomeData = genomeData.data;
+    } else break;
+  }
+
+  // Parse asNEATPatch if string
+  while (genomeData.asNEATPatch && typeof genomeData.asNEATPatch === 'string') {
+    try { genomeData.asNEATPatch = JSON.parse(genomeData.asNEATPatch); } catch { break; }
+  }
+
+  if (!genomeData?.asNEATPatch) throw new Error('No asNEATPatch found in response');
+
+  if (!genomeData.asNEATPatch.toJSON) {
+    genomeData.asNEATPatch.toJSON = function () { return this; };
+  }
+
+  // Extract a short ID from the URL (last path segment before query params)
+  const urlPath = new URL(url).pathname;
+  const shortId = urlPath.split('/').filter(Boolean).pop() || 'url-genome';
+
+  return { id: shortId, genome: genomeData };
+}
+
+// ─── Load specific genomes by ID or URL ─────────────────────────────────
 async function loadGenomesById(ids) {
-  const db = new Database(DB_PATH, { readonly: true });
-  const schema = detectSchema(db);
-  console.log(`DB schema: ${schema.idCol}/${schema.dataCol}`);
-
   const genomes = [];
-  for (const id of ids) {
+
+  // Separate URLs from DB IDs
+  const urls = ids.filter(id => id.startsWith('http://') || id.startsWith('https://'));
+  const dbIds = ids.filter(id => !id.startsWith('http://') && !id.startsWith('https://'));
+
+  // Fetch URL genomes
+  for (const url of urls) {
     try {
-      const row = db.prepare(
-        `SELECT ${schema.idCol} AS id, ${schema.dataCol} AS data FROM genomes WHERE ${schema.idCol} = ?`
-      ).get(id);
-
-      if (!row) {
-        console.warn(`  ⚠️  Genome not found in DB: ${id}`);
-        continue;
-      }
-
-      const genomeData = await parseGenomeRow(row);
-      if (!genomeData) { console.warn(`  Skipping ${id}: no asNEATPatch`); continue; }
-      genomes.push({ id: row.id, genome: genomeData });
-      console.log(`  ✓ Loaded: ${id}`);
+      const result = await loadGenomeFromUrl(url);
+      genomes.push(result);
+      console.log(`  ✓ Loaded from URL: ${result.id}`);
     } catch (e) {
-      console.warn(`  Skipping ${id}: ${e.message}`);
+      console.warn(`  ⚠️  URL fetch failed: ${url} — ${e.message}`);
     }
   }
-  db.close();
+
+  // Load DB genomes (only if there are DB IDs)
+  if (dbIds.length > 0) {
+    let db;
+    try {
+      db = new Database(DB_PATH, { readonly: true });
+      const schema = detectSchema(db);
+      console.log(`DB schema: ${schema.idCol}/${schema.dataCol}`);
+
+      for (const id of dbIds) {
+        try {
+          const row = db.prepare(
+            `SELECT ${schema.idCol} AS id, ${schema.dataCol} AS data FROM genomes WHERE ${schema.idCol} = ?`
+          ).get(id);
+
+          if (!row) {
+            console.warn(`  ⚠️  Genome not found in DB: ${id}`);
+            continue;
+          }
+
+          const genomeData = await parseGenomeRow(row);
+          if (!genomeData) { console.warn(`  Skipping ${id}: no asNEATPatch`); continue; }
+          genomes.push({ id: row.id, genome: genomeData });
+          console.log(`  ✓ Loaded: ${id}`);
+        } catch (e) {
+          console.warn(`  Skipping ${id}: ${e.message}`);
+        }
+      }
+    } catch (e) {
+      console.warn(`  ⚠️  DB access failed (${DB_PATH}): ${e.message}`);
+      console.warn(`     DB IDs skipped: ${dbIds.join(', ')}`);
+    } finally {
+      if (db) db.close();
+    }
+  }
+
   return genomes;
 }
 
@@ -594,12 +656,16 @@ async function main() {
 
   console.log(`\n${'═'.repeat(100)}`);
   if (cli.mode === 'ids') {
+    const urlCount = cli.ids.filter(id => id.startsWith('http://') || id.startsWith('https://')).length;
+    const dbCount = cli.ids.length - urlCount;
     console.log(`Specific genome comparison: ${cli.ids.length} genome(s) × ${duration}s`);
-    console.log(`IDs: ${cli.ids.join(', ')}`);
+    if (urlCount > 0) console.log(`  URLs: ${urlCount}`);
+    if (dbCount > 0) console.log(`  DB IDs: ${dbCount}`);
+    console.log(`IDs/URLs: ${cli.ids.join(', ')}`);
   } else {
     console.log(`Batch comparison: ${cli.count} random genomes × ${duration}s`);
   }
-  console.log(`DB: ${DB_PATH}`);
+  console.log(`DB: ${DB_PATH} (used for DB IDs only)`);
   console.log(`Output: ${OUT_DIR}`);
   console.log(`Render paths: batch (setValueCurveAtTime) | streaming (AudioBufSrc, full-duration CPPN + mix gain curves) | stream1 (AudioBufSrc, no mix)`);
   console.log('═'.repeat(100) + '\n');
